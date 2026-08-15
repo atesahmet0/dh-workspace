@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import {
+  confinePath,
   delegationDepthOf,
   errorMessage,
   finalAssistantOutput,
@@ -201,7 +202,9 @@ async function readRecord(
   const record = parseRecord(text)
   let result = ''
   try {
-    result = await readFile(record.resultPath, 'utf8')
+    // Confine the record's result path before reading: a crafted record file
+    // must not be able to point the read outside the project's delegations dir.
+    result = await readFile(confinePath(delegationsDir(projectId), record.resultPath), 'utf8')
   } catch {
     result = ''
   }

@@ -21,7 +21,13 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRestriction, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { delegationDepthOf, errorMessage, finalAssistantOutput } from '@dh-multiagents/dh-common'
+import {
+  CAPABILITY_MATRIX,
+  delegationDepthOf,
+  errorMessage,
+  finalAssistantOutput,
+  restrictPresetTools,
+} from '@dh-multiagents/dh-common'
 
 export const name = 'dh-subagent-preset'
 export const inject = ['subagents']
@@ -119,6 +125,7 @@ interface AgentPresets {
   composedPreset(agentCtx: Context): string | undefined
   recompose(agentCtx: Context, id: string): Promise<unknown>
   standingKeyFor(id?: string): Promise<unknown>
+  readonly defaultId: string
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +331,12 @@ class PresetSubagentProvider implements SubagentProvider {
       signal: request.signal,
       setup: async (childCtx: Context): Promise<void> => {
         await composeNamedPreset(childCtx, this.presetId)
+        // Authoritative capability enforcement for this child: after the
+        // named preset is composed, keep exactly the preset's ALLOW-list of
+        // global tools. This runs in the setup window, before publication, so
+        // the child never sees a wider toolset.
+        restrictPresetTools(childCtx, this.presetId)
+        markPresetEnforced(childCtx)
         childCtx.systemPrompt.context({
           name: 'subagent:delegation',
           order: 120,
@@ -360,6 +373,12 @@ class PresetSubagentProvider implements SubagentProvider {
  * cannot re-link the child. This contribution runs inside the child's setup
  * window and re-links it onto the preset named by its persisted descriptor.
  *
+ * The capability restriction is applied SYNCHRONOUSLY in the contribution (the
+ * child's own scope layer, before publication), so even while the async
+ * re-link is pending the child never sees tools outside its preset's
+ * ALLOW-list. The re-link then swaps the composition so the child's persona
+ * and standing mount match the named preset.
+ *
  * Fail-loud: when the binding cannot be established (no agent-presets service,
  * or no descriptor mapping to a named preset), the contribution throws inside
  * the unpublished creation window, which aborts the child creation instead of
@@ -382,6 +401,10 @@ function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
       + `(provider: ${String(provider)}); aborting child creation instead of running it under the parent's preset`,
     )
   }
+  // Authoritative capability enforcement, applied synchronously inside the
+  // creation window regardless of when the async re-link lands.
+  restrictPresetTools(childCtx, presetId)
+  markPresetEnforced(childCtx)
   const presets = childCtx.get('agentPresets') as AgentPresets | undefined
   if (presets === undefined) {
     throw new Error(
@@ -403,6 +426,105 @@ function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
 }
 
 // ---------------------------------------------------------------------------
+// Top-level (root) preset enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * Agent contexts whose setup window already enforced the capability matrix.
+ * The harness's own entry points create agents WELL outside this plugin (the
+ * headless runner, the web gateway, the in-process subagent drivers), so the
+ * `agent/created` hook below is the single place every agent's toolset is
+ * checked. Children this plugin composed mark their context here so the hook
+ * skips them: their `composedPreset` is still the PARENT's bind at that
+ * instant (a continuable child's re-link is asynchronous), and re-restricting
+ * would intersect the two allow-lists and strip exactly the child's tools.
+ */
+const PRESET_ENFORCED_CHILDREN = new WeakSet<object>()
+
+/** Record that a child's setup window already enforced its preset's allow-list. */
+function markPresetEnforced(childCtx: Context): void {
+  PRESET_ENFORCED_CHILDREN.add(childCtx)
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'agent/created'(payload: { agent: AgentLike }): void
+  }
+}
+
+/**
+ * Enforce the capability matrix on every agent at publication, before
+ * `agent/session-start` and the first prompt assembly. This is the only hook a
+ * plugin has over agents created by the harness's own entry points: the
+ * headless runner publishes the TOP-LEVEL agent bare (no preset composed) and
+ * the web gateway composes it in its own setup, so neither toolset was ever
+ * restricted before.
+ */
+function enforcePresetOnCreated(ctx: Context, agent: AgentLike): void {
+  // A child this plugin composed enforces its own preset in its setup window.
+  if (PRESET_ENFORCED_CHILDREN.has(agent.ctx)) return
+  const presets = agent.ctx.get('agentPresets') as AgentPresets | undefined
+  if (presets === undefined) {
+    // Rosterless deployment: there is no capability matrix to enforce.
+    return
+  }
+  const composed = presets.composedPreset(agent.ctx)
+  if (composed !== undefined) {
+    // Already composed: the web root (mounted in the gateway's setup) and
+    // every harness-internal child that inherited a preset via composeFrom.
+    restrictPresetTools(agent.ctx, composed)
+    return
+  }
+  // Bare agent. The headless runner publishes the top-level orchestrator
+  // without composing any preset, so bind the deployment default (plan) both
+  // to run its persona and to make the orchestrator delegation-eligible.
+  const header = agent.session.header
+  const isTopLevelRoot = header.parentSession === undefined && (header.delegationDepth ?? 0) <= 0
+  if (!isTopLevelRoot) {
+    ctx.logger.warn(
+      `dh-subagent-preset: agent "${agent.id}" is a child but joined no preset; `
+      + 'it stays bare with the unrestricted global toolset',
+    )
+    return
+  }
+  const defaultId = presets.defaultId
+  // Synchronous: applies before `agent/session-start` and the first prompt
+  // assembly, so the matrix gates the model even if the re-link is pending.
+  restrictPresetTools(agent.ctx, defaultId)
+  void bindBareRootToDefault(agent, presets, defaultId)
+}
+
+/**
+ * Best-effort re-link of a bare top-level agent onto the deployment default
+ * preset. `agent/created` is a synchronous emit, so the re-link cannot be
+ * awaited inside it; it resolves within a few microtasks (the standing mount
+ * is pre-warmed at boot), long before the first model turn executes. The
+ * synchronous restriction in `enforcePresetOnCreated` is the deterministic
+ * gate; this re-link only adds the preset's persona and delegation eligibility.
+ */
+async function bindBareRootToDefault(agent: AgentLike, presets: AgentPresets, presetId: string): Promise<void> {
+  try {
+    // Blank-only contract (the harness's own definition: a session is blank
+    // until its first `turn/start`; the policy seed events a fresh session
+    // carries are not production). Never swap a composition that already
+    // produced a turn — the synchronous restriction above still holds.
+    if (agent.session.events.some(event => event.type === 'turn/start')) {
+      agent.ctx.logger.warn(
+        `dh-subagent-preset: top-level agent "${agent.id}" produced a turn before the default preset `
+        + `could be bound; it stays bare but remains restricted to "${presetId}"'s allow-list`,
+      )
+      return
+    }
+    await presets.recompose(agent.ctx, presetId)
+  } catch (error: unknown) {
+    agent.ctx.logger.error(
+      `dh-subagent-preset: failed to bind top-level agent "${agent.id}" onto preset "${presetId}"; `
+      + `it stays bare but remains restricted to the preset's allow-list: ${errorMessage(error)}`,
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin entry
 // ---------------------------------------------------------------------------
 
@@ -415,11 +537,20 @@ export function apply(ctx: Context): void {
   }
   subagents.registerContinuableSetup(applyNamedPresetToContinuableChild)
 
-  // Pre-warm each named preset's standing mount so a continuable child's
-  // re-link (started in the setup contribution above) has nothing to mount at
+  // Root enforcement: every agent published by any harness entry point is
+  // gated to its composed preset's allow-list at `agent/created`, before the
+  // first prompt assembly. Children this plugin already enforced in their
+  // setup windows are skipped via the marker above.
+  ctx.on('agent/created', ({ agent }) => {
+    enforcePresetOnCreated(ctx, agent)
+  })
+
+  // Pre-warm EVERY matrix preset's standing mount so a top-level agent's
+  // re-link (started in the `agent/created` hook) and a continuable child's
+  // re-link (started in the setup contribution above) have nothing to mount at
   // delegation time.
   ctx.inject(['agentPresets'], (presetCtx: Context) => {
-    for (const id of Object.keys(PRESET_BY_PROVIDER) as PresetId[]) {
+    for (const id of Object.keys(CAPABILITY_MATRIX)) {
       void (presetCtx.get('agentPresets') as unknown as AgentPresets).standingKeyFor(id).catch(
         (error: unknown) => {
           presetCtx.logger.warn(`dh-subagent-preset: preset "${id}" could not be pre-warmed: ${String(error)}`)
