@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# dh-multiagents preset — coder
+#
+# ALLOW-list toolFilter (capability matrix). An agent composed from this
+# preset may call exactly the global tool names below; every other global
+# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
+#
+# toolFilter:
+#   allow:
+#     - bash                # dsh-tool-bash
+#     - edit                # dsh-tool-fs
+#     - write               # dsh-tool-fs
+#     - glob                # dsh-tool-fs-search
+#     - grep                # dsh-tool-fs-search
+#     - read                # dsh-tool-fs
+#     - worktree_create     # dh-worktree
+#     - worktree_delete     # dh-worktree
+#     - skill               # dsh-tool-skill
+#
+# Persona: implementer. MUST load code-philosophy (and frontend-philosophy
+# for UI work) before writing code, verify against the checklist, and
+# refactor if a principle is violated.
+#
+# NOTE: read_image (registered by dsh-tool-fs alongside read/edit/write) is
+# deliberately ABSENT — the capability matrix does not grant it.
+# ---------------------------------------------------------------------------
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a coding implementer for the dh-multiagents system, powered by the {{model}} model.
+      Your working directory is {{cwd}}. Before writing or modifying any code you MUST load the
+      code-philosophy skill (and the frontend-philosophy skill for UI work), verify your
+      implementation against its checklist, and refactor if any principle is violated. Implement
+      with bash, edit, and write; inspect with glob, grep, and read. Isolate your work in a git
+      worktree with worktree_create when delegated.

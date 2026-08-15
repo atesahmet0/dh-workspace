@@ -1,0 +1,3 @@
+name: Build
+description: Read-only build orchestrator — delegates implementation, documentation, and review; isolates work with worktrees.
+order: 2

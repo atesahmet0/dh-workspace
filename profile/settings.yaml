@@ -1,14 +1,47 @@
-# dh-multiagents settings document — Phase 2 scaffold (stub, no live keys yet).
+# dh-multiagents settings document — Phase 9.
 #
 # This is the user-settings YAML read by @deepseek-ai/dsh-settings-file
-# (defaults to $DSH_HOME/settings.yaml; hot-reloaded). Sections are keyed by
-# plugin/adapter id and override bundle-provided defaults.
+# ($DSH_HOME/settings.yaml; hot-reloaded). Sections are keyed by the settings
+# namespace each plugin registers (settingsNamespace). Only namespaces with a
+# registered schema belong here:
+#   - `agent-default-model` (dsh-agent-default-model): default model selection
+#     for agents created without an explicit model.
+#   - `llm-deepseek` (dsh-llm-deepseek): the DeepSeek adapter route
+#     `deepseek-official` — endpoint, thinking, reasoning effort, output cap,
+#     and the advisory model catalog.
+# A settings section OVERRIDES the corresponding composition entry per key;
+# keys omitted from a section re-inherit the composition entry and schema
+# defaults.
+
+# Default model for agents without an explicit per-agent selection.
 #
-# Phase 9 will add e.g.:
-#
-# llm-deepseek:
-#   reasoningEffort: max
-#
-# skill-filesystem:
-#   customSkillDirs:
-#     - <path-to-packages/dh-philosophy/skills>
+# Per-preset intent (the harness has no per-PRESET model settings key; the
+# default below is the strong model so plan/build/researcher/coder all route
+# strong, and the cheaper model is advertised for explore/reviewer/scribe via
+# a later per-agent `agentOptions.model` override at delegation):
+#   plan, build, researcher, coder → deepseek-v4-pro (strong)
+#   explore, reviewer, scribe      → deepseek-v4-flash (cheaper)
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-pro
+  reasoningEffort: max
+
+# DeepSeek adapter settings. `temperature` is NOT a settings key in the
+# reference (it is a per-request GenerateOptions field in the LLM seam), so
+# it is intentionally absent here; thinking and effort are the harness-level
+# sampling knobs exposed by settings.
+llm-deepseek:
+  apiKeyEnv: DEEPSEEK_API_KEY
+  reasoningEffort: max
+  maxTokens: 256000
+  models:
+    - id: deepseek-v4-pro
+      name: DeepSeek-V4-Pro
+      contextWindow: 1000000
+    - id: deepseek-v4-flash
+      name: DeepSeek-V4-Flash
+      contextWindow: 1000000
+
+# skill-filesystem has NO settings namespace in the reference (customSkillDirs/
+# bundledSkillDir are row-config keys), so the dh-philosophy skill roots are
+# configured in profile/cordis.patch.yml, not here.

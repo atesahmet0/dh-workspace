@@ -1,14 +1,32 @@
-# dh-multiagents profile patch layer — Phase 2 scaffold (no live rows yet).
+# dh-multiagents profile patch layer — Phase 9.
 #
 # Rows here override bundle rows by id (a patch replaces the WHOLE config of a
 # targeted row; later layers win). Layer order:
 #   bundle patches -> this file -> $DSH_HOME/cordis.patch.yml -> --patch
 #
-# Phase 9 will add user-plane overrides for the dh-multiagents bundle, e.g.:
+# This layer holds USER-PLANE overrides: paths and values that depend on where
+# this profile and its bundles are installed. `!!js` expressions are evaluated
+# with globals: process, injected ctx.<service>, dshHomePath(...), baseUrl
+# (baseUrl = the profile directory).
+
+# ── skills: surface the dh-philosophy SKILL.md packages ──────────────────────
+
+# @dh-multiagents/dh-philosophy is NOT a plugin (no cordis row); its five
+# skills (code-philosophy, frontend-philosophy, code-review, plan-review,
+# plan-protocol) are discovered through the skill-filesystem provider. The
+# base row (dsh-base) carries no config; this override adds the bundled skill
+# root pointing at the installed dh-philosophy package. baseUrl is the profile
+# directory, so the path resolves under the profile's node_modules.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    bundledSkillDir: !!js 'new URL("node_modules/@dh-multiagents/dh-philosophy/skills", baseUrl).pathname'
+
+# ── user-plane override examples (commented, for the deployment owner) ───────
 #
 # - id: dh-workspace
 #   config:
-#     # plan storage root, routing rules
+#     # plan storage root, routing rules (all keys optional)
 #
 # - id: dh-delegation
 #   config:
@@ -22,5 +40,9 @@
 #   config:
 #     # worktree root policy
 #
-# Remember: `!!js` expressions are evaluated in config/disabled fields
-# (globals: process, injected ctx.<service>, dshHomePath(...), baseUrl).
+# - id: agent-presets
+#   config:
+#     default: plan        # change the default preset for new sessions
+#     roots:
+#       - path: <absolute-or-~-expanded-path-to-presets>
+#         trust: system

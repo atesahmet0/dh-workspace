@@ -1,43 +1,92 @@
-# dsh-multiagents bundle patch — Phase 2 scaffold.
+# dsh-multiagents bundle patch — Phase 9 wiring.
 #
-# The bundle root declares this file in package.json under
-# `dsh.bundle.patch`. It is a normal Cordis patch applied as ONE insert over
-# the profile root (profile cordis.patch.yml / home / --patch overlays win per
-# row id afterwards).
+# This file is the `dsh.bundle.patch` of @dh-multiagents/bundle (root
+# package.json). Layer order (bottom → top):
+#   1. `@deepseek-ai/dsh-base` bundle patch (first in dsh.profile.bundles)
+#   2. THIS bundle patch
+#   3. profile cordis.patch.yml → $DSH_HOME/cordis.patch.yml → --patch → telemetry/preset-root overlays
 #
-# This file intentionally contains NO live rows yet. Phase 9 fills in the rows
-# below. Row ids and module names are the NAMING CONTRACT locked in DESIGN.md
-# and must be reused verbatim by every later phase.
-#
-# ---------------------------------------------------------------------------
-# Planned rows (commented placeholders — enable with real config in Phase 9):
-#
-# - id: dh-workspace
-#   name: '@dh-multiagents/dh-workspace'
-#   # registers tools: plan_save, plan_read
-#
-# - id: dh-delegation
-#   name: '@dh-multiagents/dh-delegation'
-#   # registers tools: delegate, delegation_read, delegation_list
-#
-# - id: dh-subagent-preset
-#   name: '@dh-multiagents/dh-subagent-preset'
-#   # registers SubagentProvider names:
-#   #   explore, researcher, coder, scribe, reviewer
-#
-# - id: dh-worktree
-#   name: '@dh-multiagents/dh-worktree'
-#   # registers tools: worktree_create, worktree_delete
-#
-# ---------------------------------------------------------------------------
-# dh-philosophy is a SKILL.md package, NOT a plugin: it has no cordis row here.
-# Its SKILL.md directories are surfaced through the skill-filesystem provider
-# (customSkillDirs / bundledSkillDir) in Phase 9, not through a plugin row.
-#
-# Phase 9 reminders (from the dsh API reference):
-# - A patch replaces a targeted row's WHOLE config; later layers win by id.
-# - Any row that publishes a process-global service must sit inside a
-#   `cordis:group` with `group: true` and an `isolate` realm, or
-#   dsh-agent-presets rejects the mount.
-# - `!!js` expressions are evaluated in `config`/`disabled` fields (globals:
-#   process, injected ctx.<service>, dshHomePath(...), baseUrl).
+# A patch REPLACES a targeted row's WHOLE `config` (no deep-merge), so every
+# row overridden below restates every key it owns. `!!js` expressions are
+# evaluated in `config`/`disabled` fields (globals: process, injected
+# ctx.<service>, dshHomePath(...), baseUrl).
+
+# ── base layering (rows dsh-base already inserts; restated here so the      ──
+#    dh-multiagents deployment states its intent explicitly) ──────────────────
+
+# The native DeepSeek adapter (dsh-base row `llm-deepseek`). Credential env is
+# the default; per-model routing and reasoning defaults come from the
+# `llm-deepseek:` section of profile/settings.yaml, never from this row.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+
+# Local sandbox backend (dsh-base row `sandbox`). All config keys are optional
+# and take their defaults; restated so the executor selection is explicit.
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+
+# Sandbox policy (dsh-base row `sandbox-policy`). workspace-write lets the
+# `coder` child mutate the workspace; the read-only presets (plan/build/
+# explore/researcher/reviewer) rely on their toolFilter ALLOW-lists (bash/
+# edit/write absent) instead of the sandbox mode.
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    workspaceRoot: !!js process.cwd()
+
+# Session persistence (dsh-base row `session-persistence-jsonl`): JSONL
+# backend rooted under $DSH_HOME/sessions (dshHomePath resolves $DSH_HOME,
+# falling back to ~/.dsh). This is the session-persistence configuration.
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js dshHomePath('sessions')
+
+# ── agent presets: roster + discovery roots ──────────────────────────────────
+
+# The dsh-agent-presets service (not provided by dsh-base). default: plan.
+# roots: the presetRoot mechanism (AgentPresets.Config.roots, first-root-wins
+# per id); the path resolves to this bundle's presets/ dir under the profile's
+# node_modules (baseUrl = profile dir). NOTE: the reference dsh CLI appends
+# its own shipped preset root as the LAST overlay, replacing `roots`; if that
+# overlay interferes, mirror `presets/` into $DSH_HOME/.agent-presets/ (the
+# reference user root, enabled by includeUserRoot).
+- insert:
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: plan
+        roots:
+          - path: !!js 'new URL("node_modules/@dh-multiagents/bundle/presets/", baseUrl).pathname'
+            trust: system
+        includeUserRoot: true
+
+    # ── dh-multiagents plugins (row ids/names per DESIGN.md §2) ──────────────
+
+    - id: dh-workspace
+      name: '@dh-multiagents/dh-workspace'
+      # registers tools: plan_save, plan_read (+ systemPrompt.context sections)
+
+    - id: dh-delegation
+      name: '@dh-multiagents/dh-delegation'
+      # registers tools: delegate, delegation_read, delegation_list
+
+    - id: dh-subagent-preset
+      name: '@dh-multiagents/dh-subagent-preset'
+      # registers SubagentProvider names: explore, researcher, coder, scribe, reviewer
+
+    - id: dh-worktree
+      name: '@dh-multiagents/dh-worktree'
+      # registers tools: worktree_create, worktree_delete
+
+# ── skills ───────────────────────────────────────────────────────────────────
+
+# @dh-multiagents/dh-philosophy is a SKILL.md package, NOT a plugin: it has no
+# cordis row. Its five SKILL.md directories are surfaced through the
+# skill-filesystem provider. The profile layer (profile/cordis.patch.yml)
+# overrides the skill-filesystem row with bundledSkillDir/customSkillDirs
+# pointing at the installed dh-philosophy package, because that path is
+# deployment-specific and belongs to the user layer.

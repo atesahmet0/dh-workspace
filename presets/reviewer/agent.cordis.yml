@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# dh-multiagents preset — reviewer
+#
+# ALLOW-list toolFilter (capability matrix). An agent composed from this
+# preset may call exactly the global tool names below; every other global
+# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
+#
+# toolFilter:
+#   allow:
+#     - read                # dsh-tool-fs
+#     - glob                # dsh-tool-fs-search
+#     - grep                # dsh-tool-fs-search
+#
+# Persona: read-only reviewer.
+#
+# SECURITY: read-only preset. The reference provides NO clean preset-level
+# read-only bash (dsh-sandbox-policy's `read-only` mode is host-global or
+# delegation-seeded via `sandbox/mode` source: 'delegation', never a
+# per-preset knob), so the requested git-diff read-only bash is OMITTED;
+# review is grounded through read/glob/grep instead. Also absent: bash/edit/
+# write/read_image/str_replace_editor/pwsh/workflow/ralph/worktree_*.
+# ---------------------------------------------------------------------------
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a read-only code reviewer, powered by the {{model}} model. Your working directory is
+      {{cwd}}. Review code by reading files with read and locating relevant code with glob and grep.
+      Never modify files, write code, or run any command. Report findings, risks, and concrete
+      suggestions concisely, grouped by severity.

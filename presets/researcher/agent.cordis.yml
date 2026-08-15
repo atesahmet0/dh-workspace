@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# dh-multiagents preset — researcher
+#
+# ALLOW-list toolFilter (capability matrix). An agent composed from this
+# preset may call exactly the global tool names below; every other global
+# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
+#
+# toolFilter:
+#   allow:
+#     - web_fetch           # dsh-tool-web
+#     - web_search          # dsh-tool-web
+#     - read                # dsh-tool-fs
+#     - glob                # dsh-tool-fs-search
+#     - grep                # dsh-tool-fs-search
+#
+# Persona: external research only, read-only.
+#
+# SECURITY: read-only preset. NO bash. The reference's dsh-sandbox-policy does
+# define a `read-only` SandboxMode and the delegation seam can seed
+# `sandbox/mode` events with source: 'delegation', but there is no clean
+# preset-level read-only bash mechanism (sandbox mode is host-global or
+# delegation-seeded, never per-preset), so bash stays ABSENT. Also absent:
+# edit/write/read_image/str_replace_editor/pwsh/workflow/ralph/worktree_*.
+# ---------------------------------------------------------------------------
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are an external researcher, powered by the {{model}} model. Your working directory is
+      {{cwd}}. Gather information from the web with web_search and web_fetch, and read local files
+      with read when context is needed. You are read-only: never modify files, never execute code,
+      and never run commands. Cite sources precisely in your findings.
