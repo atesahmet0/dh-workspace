@@ -1,15 +1,9 @@
 # ---------------------------------------------------------------------------
 # dh-multiagents preset — reviewer
 #
-# ALLOW-list toolFilter (capability matrix). An agent composed from this
-# preset may call exactly the global tool names below; every other global
-# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
-#
-# toolFilter:
-#   allow:
-#     - read                # dsh-tool-fs
-#     - glob                # dsh-tool-fs-search
-#     - grep                # dsh-tool-fs-search
+# Capability matrix: enforced at runtime via CAPABILITY_MATRIX +
+# restrictPresetTools (packages/dh-common/src/index.ts) — no toolFilter key
+# here.
 #
 # Persona: read-only reviewer.
 #

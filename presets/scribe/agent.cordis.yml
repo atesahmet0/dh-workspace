@@ -1,15 +1,9 @@
 # ---------------------------------------------------------------------------
 # dh-multiagents preset — scribe
 #
-# ALLOW-list toolFilter (capability matrix). An agent composed from this
-# preset may call exactly the global tool names below; every other global
-# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
-#
-# toolFilter:
-#   allow:
-#     - edit                # dsh-tool-fs
-#     - write               # dsh-tool-fs
-#     - read                # dsh-tool-fs
+# Capability matrix: enforced at runtime via CAPABILITY_MATRIX +
+# restrictPresetTools (packages/dh-common/src/index.ts) — no toolFilter key
+# here.
 #
 # Persona: docs/prose only. No bash, no search, no skills, no delegation.
 #

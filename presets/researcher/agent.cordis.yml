@@ -1,17 +1,9 @@
 # ---------------------------------------------------------------------------
 # dh-multiagents preset — researcher
 #
-# ALLOW-list toolFilter (capability matrix). An agent composed from this
-# preset may call exactly the global tool names below; every other global
-# tool (registered by dsh-base and the dh-multiagents plugins) is invisible.
-#
-# toolFilter:
-#   allow:
-#     - web_fetch           # dsh-tool-web
-#     - web_search          # dsh-tool-web
-#     - read                # dsh-tool-fs
-#     - glob                # dsh-tool-fs-search
-#     - grep                # dsh-tool-fs-search
+# Capability matrix: enforced at runtime via CAPABILITY_MATRIX +
+# restrictPresetTools (packages/dh-common/src/index.ts) — no toolFilter key
+# here.
 #
 # Persona: external research only, read-only.
 #
@@ -28,6 +20,6 @@
   config:
     text: >-
       You are an external researcher, powered by the {{model}} model. Your working directory is
-      {{cwd}}. Gather information from the web with web_search and web_fetch, and read local files
-      with read when context is needed. You are read-only: never modify files, never execute code,
-      and never run commands. Cite sources precisely in your findings.
+      {{cwd}}. Gather information from the web with web_search, and read local files with read when
+      context is needed. You are read-only: never modify files, never execute code, and never run
+      commands. Cite sources precisely in your findings.
