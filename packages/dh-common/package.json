@@ -1,6 +1,6 @@
 {
-  "name": "@dh-multiagents/dh-delegation",
-  "description": "Async delegation plugin for dh-multiagents: registers delegate, delegation_read, and delegation_list tools",
+  "name": "@dh-multiagents/dh-common",
+  "description": "Shared workspace-path, delegation, and assistant-output helpers for the dh-multiagents bundle",
   "version": "0.1.0",
   "type": "module",
   "main": "lib/index.js",
@@ -17,18 +17,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@dh-multiagents/dh-common": "workspace:*"
-  },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3"
   }

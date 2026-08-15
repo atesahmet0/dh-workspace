@@ -9,11 +9,10 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { parseProjectId, projectDir, projectIdOf } from '@dh-multiagents/dh-common'
 
 export const name = 'dh-worktree'
 export const inject = ['tools']
@@ -55,21 +54,12 @@ interface SubprocessRuntime {
 // Path helpers
 // ---------------------------------------------------------------------------
 
-function dshHome(): string {
-  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
-}
-
-function projectIdOf(exec: ToolRunContext): string {
-  const cwd = exec.agent?.session.header.cwd ?? process.cwd()
-  return basename(cwd)
-}
-
 function worktreesFile(projectId: string): string {
-  return join(dshHome(), 'workspace', projectId, 'worktrees.json')
+  return join(projectDir(projectId), 'worktrees.json')
 }
 
 function worktreesDir(projectId: string): string {
-  return join(dshHome(), 'workspace', projectId, 'worktrees')
+  return join(projectDir(projectId), 'worktrees')
 }
 
 /** Make a branch name safe to use as a single path component. */
@@ -95,6 +85,8 @@ async function runGit(
   args: readonly string[],
   signal: AbortSignal,
 ): Promise<GitResult> {
+  // Do not execute an already-aborted call.
+  signal.throwIfAborted()
   const subprocess = ctx.get('subprocess') as unknown as SubprocessRuntime
   const handle = subprocess.spawn({
     argv: ['git', ...args],
@@ -105,7 +97,7 @@ async function runGit(
       stderr: { maxBytes: 64 * 1024 },
     },
     graceMs: 10_000,
-    ...(signal.aborted ? {} : { signal }),
+    signal,
   })
   const outcome = await handle.done
   const stdout = handle.collected.stdout?.readFrom(0).text ?? ''
@@ -177,7 +169,7 @@ export function apply(ctx: Context): void {
     },
     async execute(args, exec) {
       const cwd = exec.agent?.session.header.cwd ?? process.cwd()
-      const projectId = args.projectId ?? projectIdOf(exec)
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
       // Fail loud outside a git work tree.
       await runGit(ctx, cwd, ['rev-parse', '--is-inside-work-tree'], exec.signal)
 
@@ -220,7 +212,7 @@ export function apply(ctx: Context): void {
       render: (_args, value) => [{ type: 'text', text: `worktree removed: ${value.path}` }],
     },
     async execute(args, exec) {
-      const projectId = args.projectId ?? projectIdOf(exec)
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
       // Fail loud when the path does not look like a tracked worktree.
       const entries = await readWorktrees(projectId)
       const tracked = entries.find(entry => entry.path === args.path)
@@ -238,7 +230,10 @@ export function apply(ctx: Context): void {
         )
       }
 
-      await runGit(ctx, args.path, ['worktree', 'remove', '--force', args.path], exec.signal)
+      // Run the removal from the session cwd (the main checkout), not from
+      // inside the worktree being removed.
+      const cwd = exec.agent?.session.header.cwd ?? process.cwd()
+      await runGit(ctx, cwd, ['worktree', 'remove', '--force', args.path], exec.signal)
       await writeWorktrees(projectId, entries.filter(entry => entry.path !== args.path))
       return { path: args.path, removed: true }
     },

@@ -10,11 +10,10 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join } from 'node:path'
-import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { confinePath, errorMessage, parseProjectId, projectDir, projectIdOf } from '@dh-multiagents/dh-common'
 
 export const name = 'dh-workspace'
 export const inject = ['tools', 'systemPrompt']
@@ -23,27 +22,11 @@ export const inject = ['tools', 'systemPrompt']
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve `$DSH_HOME`, falling back to `~/.dsh` when unset. */
-function dshHome(): string {
-  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
-}
-
-/** The project id: explicit param, else the basename of the session cwd. */
-function projectIdOf(exec: ToolRunContext): string {
-  const cwd = exec.agent?.session.header.cwd ?? process.cwd()
-  return basename(cwd)
-}
-
 /** Ensure the per-project workspace directory exists and return its path. */
 async function ensureProjectDir(projectId: string): Promise<string> {
-  const dir = join(dshHome(), 'workspace', projectId)
+  const dir = projectDir(projectId)
   await mkdir(dir, { recursive: true })
   return dir
-}
-
-/** The default plan path for one project. */
-function planPathFor(projectId: string): string {
-  return join(dshHome(), 'workspace', projectId, 'plan.md')
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +125,7 @@ export function apply(ctx: Context): void {
       if (!hasTopLevelHeading(content)) {
         throw new Error('plan_save: content must contain a top-level "# " heading as its first non-empty line')
       }
-      const projectId = args.projectId ?? projectIdOf(exec)
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
       const dir = await ensureProjectDir(projectId)
       const path = join(dir, 'plan.md')
       const bytes = Buffer.byteLength(content, 'utf8')
@@ -153,9 +136,11 @@ export function apply(ctx: Context): void {
 
   ctx.tools.register(defineTool({
     name: 'plan_read',
-    description: 'Read back the persisted markdown plan. Without a path, reads the current project\'s plan.md.',
+    description: 'Read back the persisted markdown plan. The path is resolved against '
+      + '$DSH_HOME/workspace/<projectId>/ and must stay inside that directory.',
     parameters: {
-      path: { type: 'string', description: 'Absolute path to a plan file; defaults to $DSH_HOME/workspace/<projectId>/plan.md' },
+      path: { type: 'string', description: 'Path within the project workspace (relative, or absolute inside it); defaults to plan.md' },
+      projectId: { type: 'string', description: 'Project id (defaults to the basename of the session working directory)' },
     },
     output: {
       schema: {
@@ -169,11 +154,8 @@ export function apply(ctx: Context): void {
       render: (_args, value) => [{ type: 'text', text: value.content }],
     },
     async execute(args, exec) {
-      const projectId = projectIdOf(exec)
-      const path = args.path ?? planPathFor(projectId)
-      if (!isAbsolute(path)) {
-        throw new Error(`plan_read: path must be absolute, got "${path}"`)
-      }
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
+      const path = confinePath(projectDir(projectId), args.path ?? 'plan.md')
       let content: string
       try {
         content = await readFile(path, 'utf8')
@@ -191,10 +173,4 @@ export function apply(ctx: Context): void {
       text: (assemble) => rulesForAgent(assemble, target),
     })
   }
-}
-
-/** Extract a safe single-line message from an unknown error. */
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
 }

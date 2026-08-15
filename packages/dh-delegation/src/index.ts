@@ -12,11 +12,20 @@
  */
 
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
-import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import {
+  delegationDepthOf,
+  errorMessage,
+  finalAssistantOutput,
+  parseProjectId,
+  projectDir,
+  projectIdOf,
+  readableDelegationId,
+} from '@dh-multiagents/dh-common'
+import type { ContentBlockLike } from '@dh-multiagents/dh-common'
 
 export const name = 'dh-delegation'
 export const inject = ['tools']
@@ -26,9 +35,7 @@ export const inject = ['tools']
 // ---------------------------------------------------------------------------
 
 type AgentLike = NonNullable<ToolRunContext['agent']>
-type SessionEventLike = AgentLike['session']['events'][number]
 type SessionIdBrand = AgentLike['session']['header']['id']
-type ContentBlockLike = { readonly type: string; readonly [key: string]: unknown }
 
 interface SubagentStartRequest {
   readonly label?: string
@@ -94,34 +101,28 @@ function isOneShot(agent: DelegationAgent): boolean {
   return agent === 'explore' || agent === 'researcher' || agent === 'reviewer'
 }
 
-const ADJECTIVES = ['swift', 'quiet', 'brave', 'golden', 'lively', 'calm', 'bright', 'nimble', 'steady', 'clever']
-const COLORS = ['amber', 'azure', 'coral', 'emerald', 'indigo', 'lilac', 'ruby', 'teal', 'violet']
-const ANIMALS = ['fox', 'otter', 'falcon', 'heron', 'lynx', 'badger', 'finch', 'mantis', 'owl', 'koala']
-
-function pick(values: readonly string[]): string {
-  return values[Math.floor(Math.random() * values.length)] ?? values[0] ?? 'unknown'
+/**
+ * The delegatable roles per caller preset, mirroring the routing expressed in
+ * dh-workspace's PLAN_RULES / BUILD_RULES. A read-only preset must not be able
+ * to spawn a write-capable child, so the caller's composed preset is checked at
+ * the tool boundary before any child starts.
+ */
+const DELEGATION_ROLES_BY_CALLER_PRESET: Readonly<Record<string, readonly DelegationAgent[]>> = {
+  plan: ['explore', 'researcher'],
+  build: ['explore', 'researcher', 'coder', 'scribe', 'reviewer'],
 }
 
-/** Mint a readable delegation id in the form `adjective-color-animal`. */
-function readableDelegationId(): string {
-  return `${pick(ADJECTIVES)}-${pick(COLORS)}-${pick(ANIMALS)}`
+/** The agent-preset roster surface this plugin reads (mirrors @deepseek-ai/dsh-agent-presets). */
+interface AgentPresets {
+  composedPreset(agentCtx: Context): string | undefined
 }
 
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
 
-function dshHome(): string {
-  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
-}
-
-function projectIdOf(exec: ToolRunContext): string {
-  const cwd = exec.agent?.session.header.cwd ?? process.cwd()
-  return basename(cwd)
-}
-
 function delegationsDir(projectId: string): string {
-  return join(dshHome(), 'workspace', projectId, 'delegations')
+  return join(projectDir(projectId), 'delegations')
 }
 
 function resultFileFor(projectId: string, id: string): string {
@@ -171,11 +172,25 @@ async function writeRecord(projectId: string, record: DelegationRecord, result: 
   await writeFile(record.resultPath, result, 'utf8')
 }
 
+/** Whether a delegation id is already taken in the project directory. */
+async function recordExists(projectId: string, id: string): Promise<boolean> {
+  try {
+    await readFile(join(delegationsDir(projectId), `${id}.md`), 'utf8')
+    return true
+  } catch (error: unknown) {
+    if (isMissingDir(error)) return false
+    throw error
+  }
+}
+
 /** Read a delegation record and its result file; fails loud on an unknown id. */
 async function readRecord(
   projectId: string,
   id: string,
 ): Promise<{ record: DelegationRecord; result: string; recordPath: string }> {
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) {
+    throw new Error(`delegation_read: invalid delegation id ${JSON.stringify(id)}`)
+  }
   const recordPath = join(delegationsDir(projectId), `${id}.md`)
   let text: string
   try {
@@ -239,11 +254,6 @@ async function updateRecordStatus(projectId: string, id: string, status: string,
 // Child helpers
 // ---------------------------------------------------------------------------
 
-/** Read an agent's persisted delegation depth; absence means top-level. */
-function delegationDepthOf(agent: AgentLike): number {
-  return agent.session.header.delegationDepth ?? 0
-}
-
 /** Resolve once `subagent/end` fires for exactly one child. */
 function awaitSubagentEnd(ctx: Context, childId: string, signal: AbortSignal): Promise<SubagentEndInfo> {
   return new Promise<SubagentEndInfo>((resolve, reject) => {
@@ -262,24 +272,6 @@ function awaitSubagentEnd(ctx: Context, childId: string, signal: AbortSignal): P
   })
 }
 
-/** The harness's canonical final-output selection (last non-empty assistant message). */
-function finalAssistantOutput(events: readonly SessionEventLike[]): readonly ContentBlockLike[] | undefined {
-  let message: readonly ContentBlockLike[] | undefined
-  const partial: string[] = []
-  for (const event of events) {
-    if (event.type === 'assistant/message') {
-      const content = event.data.message.content
-      if (content.length > 0) message = content as unknown as readonly ContentBlockLike[]
-    } else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') {
-      const text = event.data.chunk.text
-      if (text.length > 0) partial.push(text)
-    }
-  }
-  if (message !== undefined) return message
-  const text = partial.join('')
-  return text.length > 0 ? [{ type: 'text', text }] : undefined
-}
-
 /** Render content blocks to plain text for persistence. */
 function renderBlocks(blocks: readonly ContentBlockLike[]): string {
   return blocks.map((block) => {
@@ -293,11 +285,6 @@ async function liveOutputOf(ctx: Context, childId: string): Promise<string> {
   const child = ctx.agents.get(childId as unknown as SessionIdBrand)
   if (child === undefined) return ''
   return renderBlocks(finalAssistantOutput(child.session.events) ?? [])
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return String(error)
 }
 
 /** Normalize a stop reason into a record status. */
@@ -356,9 +343,36 @@ export function apply(ctx: Context): void {
         throw new Error('delegate: delegation from within a subagent is forbidden (anti-recursion); delegate only from a top-level session')
       }
 
-      const subagents = ctx.get('subagents') as unknown as SubagentRuntime
-      const projectId = args.projectId ?? projectIdOf(exec)
-      const id = readableDelegationId()
+      // Privilege boundary: a read-only preset must not spawn write-capable
+      // children. The caller's composed preset fixes the delegatable roles.
+      const presets = parent.ctx.get('agentPresets') as AgentPresets | undefined
+      const callerPreset = presets?.composedPreset(parent.ctx)
+      const allowedRoles = callerPreset === undefined
+        ? undefined
+        : DELEGATION_ROLES_BY_CALLER_PRESET[callerPreset]
+      if (allowedRoles === undefined) {
+        throw new Error(
+          `delegate: preset ${callerPreset === undefined ? '<none>' : JSON.stringify(callerPreset)} may not delegate; `
+          + 'only the "plan" and "build" presets may delegate',
+        )
+      }
+      if (!allowedRoles.includes(args.agent)) {
+        throw new Error(
+          `delegate: preset "${callerPreset}" may delegate only to ${allowedRoles.join(', ')}; `
+          + `role "${args.agent}" is not allowed (refusing privilege escalation)`,
+        )
+      }
+
+      const subagents = ctx.get('subagents') as SubagentRuntime | undefined
+      if (subagents === undefined) {
+        throw new Error('delegate: the subagents service is not composed; delegation is unavailable')
+      }
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
+      // Mint a collision-free id rather than silently overwriting a record.
+      let id = readableDelegationId()
+      while (await recordExists(projectId, id)) {
+        id = readableDelegationId()
+      }
       const label = args.prompt.length > 80 ? `${args.prompt.slice(0, 80)}…` : args.prompt
       const startedAt = new Date().toISOString()
       const mode = args.mode ?? 'async'
@@ -418,19 +432,14 @@ export function apply(ctx: Context): void {
         return { id, agent: args.agent, status: 'running', resultPath, output: '' }
       }
 
-      // Continuable child (coder/scribe): completion is the child's settlement
-      // (subagent/end), delivered by the continuation manager.
+      // Continuable child (coder/scribe): `subagent/end` is an epoch/turn
+      // signal, NOT settlement — the child may be continued. Keep the record
+      // running and let delegation_read's live-output branch be the truth.
       if (mode === 'sync') {
         const info = await awaitSubagentEnd(ctx, childId, exec.signal)
         const output = renderBlocks(info.lastAssistantMessage ?? [])
-        await updateRecordStatus(projectId, id, statusOf(info.stopReason), output)
-        return { id, agent: args.agent, status: statusOf(info.stopReason), resultPath, output }
+        return { id, agent: args.agent, status: 'running', resultPath, output }
       }
-      void awaitSubagentEnd(ctx, childId, exec.signal).then(async (info) => {
-        await updateRecordStatus(projectId, id, statusOf(info.stopReason), renderBlocks(info.lastAssistantMessage ?? []))
-      }).catch(async (error: unknown) => {
-        await updateRecordStatus(projectId, id, 'error', errorMessage(error))
-      })
       return { id, agent: args.agent, status: 'running', resultPath, output: '' }
     },
   }))
@@ -463,7 +472,7 @@ export function apply(ctx: Context): void {
       }],
     },
     async execute(args, exec) {
-      const projectId = args.projectId ?? projectIdOf(exec)
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
       const read = await readRecord(projectId, args.id)
       let result = read.result
       if (read.record.status === 'running' && read.record.childId !== '') {
@@ -519,7 +528,7 @@ export function apply(ctx: Context): void {
       }],
     },
     async execute(args, exec) {
-      const projectId = args.projectId ?? projectIdOf(exec)
+      const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
       const dir = delegationsDir(projectId)
       let names: string[]
       try {
@@ -541,8 +550,9 @@ export function apply(ctx: Context): void {
             startedAt: read.record.startedAt,
             updatedAt: read.record.updatedAt,
           })
-        } catch {
-          // Skip records that cannot be parsed.
+        } catch (error: unknown) {
+          // Surface unparseable records instead of silently dropping them.
+          ctx.logger.warn(`dh-delegation: skipping unparseable delegation record "${id}": ${errorMessage(error)}`)
         }
       }
       records.sort((a, b) => a.startedAt.localeCompare(b.startedAt))

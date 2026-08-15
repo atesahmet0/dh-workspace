@@ -14,6 +14,7 @@
     "clean": "rm -rf packages/*/lib"
   },
   "dependencies": {
+    "@dh-multiagents/dh-common": "workspace:*",
     "@dh-multiagents/dh-delegation": "workspace:*",
     "@dh-multiagents/dh-philosophy": "workspace:*",
     "@dh-multiagents/dh-subagent-preset": "workspace:*",

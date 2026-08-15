@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@dh-multiagents/dh-common':
+        specifier: workspace:*
+        version: link:packages/dh-common
       '@dh-multiagents/dh-delegation':
         specifier: workspace:*
         version: link:packages/dh-delegation
@@ -24,7 +27,23 @@ importers:
         specifier: workspace:*
         version: link:packages/dh-worktree
 
+  packages/dh-common:
+    devDependencies:
+      '@deepseek-ai/dsh-tools':
+        specifier: ^0.1.0-rc.6
+        version: 0.1.0-rc.6(f8724372086ccc1457fc84e7becee2e0)
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/dh-delegation:
+    dependencies:
+      '@dh-multiagents/dh-common':
+        specifier: workspace:*
+        version: link:../dh-common
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -49,6 +68,10 @@ importers:
         version: 6.0.3
 
   packages/dh-subagent-preset:
+    dependencies:
+      '@dh-multiagents/dh-common':
+        specifier: workspace:*
+        version: link:../dh-common
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -67,6 +90,10 @@ importers:
         version: 6.0.3
 
   packages/dh-workspace:
+    dependencies:
+      '@dh-multiagents/dh-common':
+        specifier: workspace:*
+        version: link:../dh-common
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -85,6 +112,10 @@ importers:
         version: 6.0.3
 
   packages/dh-worktree:
+    dependencies:
+      '@dh-multiagents/dh-common':
+        specifier: workspace:*
+        version: link:../dh-common
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1

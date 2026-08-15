@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRestriction, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { delegationDepthOf, errorMessage, finalAssistantOutput } from '@dh-multiagents/dh-common'
 
 export const name = 'dh-subagent-preset'
 export const inject = ['subagents']
@@ -162,11 +163,6 @@ const SUBAGENT_DELEGATION_CONTEXT
 // Child composition helpers
 // ---------------------------------------------------------------------------
 
-/** Read an agent's persisted delegation depth; absence means top-level. */
-function delegationDepthOf(agent: AgentLike): number {
-  return agent.session.header.delegationDepth ?? 0
-}
-
 /** The balanced completed-turn prefix of the parent's log, used as a fork seed. */
 function completedTurnPrefix(parent: AgentLike): readonly SessionEventLike[] {
   const events = parent.session.events
@@ -208,24 +204,6 @@ function createUserMessageLike(content: readonly ContentBlockLike[]): UserMessag
   } as unknown as UserMessageLike
 }
 
-/** The harness's canonical final-output selection (last non-empty assistant message). */
-function finalAssistantOutput(events: readonly SessionEventLike[]): readonly ContentBlockLike[] | undefined {
-  let message: readonly ContentBlockLike[] | undefined
-  const partial: string[] = []
-  for (const event of events) {
-    if (event.type === 'assistant/message') {
-      const content = event.data.message.content
-      if (content.length > 0) message = content as unknown as readonly ContentBlockLike[]
-    } else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') {
-      const text = event.data.chunk.text
-      if (text.length > 0) partial.push(text)
-    }
-  }
-  if (message !== undefined) return message
-  const text = partial.join('')
-  return text.length > 0 ? [{ type: 'text', text }] : undefined
-}
-
 /** Map a turn end reason to the subagent seam's terminal vocabulary. */
 function toStopReason(reason: { readonly kind: string } | undefined): string {
   switch (reason?.kind) {
@@ -248,7 +226,9 @@ function toStopReason(reason: { readonly kind: string } | undefined): string {
 function readChildResult(child: AgentLike, cancelled: boolean): SubagentResult {
   const events = child.session.events
   const lastEnd = events.findLast(event => event.type === 'turn/end')
-  const output = finalAssistantOutput(events) ?? []
+  // The shared selector returns a structural block type; the provider seam
+  // expects the precise content-block union, so narrow at this boundary.
+  const output = (finalAssistantOutput(events) ?? []) as readonly ContentBlockLike[]
   const recorded = toStopReason(lastEnd?.data.reason)
   const stopReason = cancelled && recorded !== 'completed' ? 'aborted' : recorded
   return { output, stopReason }
@@ -308,7 +288,9 @@ function drivePublishedRun(
 
 class PresetSubagentProvider implements SubagentProvider {
   readonly capabilities: SubagentCapabilities = {
-    outputSchema: true,
+    // outputSchema is not implemented for these children, so it must not be
+    // advertised (the harness rejects requested capabilities the provider lacks).
+    outputSchema: false,
     depthLimit: true,
     toolFilter: true,
     persona: true,
@@ -378,10 +360,13 @@ class PresetSubagentProvider implements SubagentProvider {
  * cannot re-link the child. This contribution runs inside the child's setup
  * window and re-links it onto the preset named by its persisted descriptor.
  *
- * The rebind is fire-and-forget because `recompose` is asynchronous while the
- * manager's setup is synchronous; standing mounts are pre-warmed in `apply` so
- * the rebind settles on the microtask queue, well before the first turn's
- * prompt assembly in practice. This is a known Phase 9 refinement area.
+ * Fail-loud: when the binding cannot be established (no agent-presets service,
+ * or no descriptor mapping to a named preset), the contribution throws inside
+ * the unpublished creation window, which aborts the child creation instead of
+ * leaving it under the parent's (possibly read-only) preset. The seam's setup
+ * contribution is synchronous, so the async rebind itself cannot be awaited
+ * here; a rejected rebind cancels the child and surfaces the failure loudly
+ * instead of silently running under the parent's composition.
  */
 function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
   const descriptor = childCtx.agent?.session.events.findLast(
@@ -391,16 +376,29 @@ function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
     ? (descriptor as unknown as { data?: { provider?: PresetId } }).data?.provider
     : undefined
   const presetId = provider !== undefined ? PRESET_BY_PROVIDER[provider] : undefined
-  if (presetId !== undefined) {
-    const presets = childCtx.get('agentPresets') as AgentPresets | undefined
-    if (presets !== undefined) {
-      void presets.recompose(childCtx, presetId).catch((error: unknown) => {
-        childCtx.logger.warn(
-          `dh-subagent-preset: could not re-link continuable child onto preset "${presetId}": ${String(error)}`,
-        )
-      })
-    }
+  if (presetId === undefined) {
+    throw new Error(
+      `dh-subagent-preset: continuable child has no descriptor mapping to a named preset `
+      + `(provider: ${String(provider)}); aborting child creation instead of running it under the parent's preset`,
+    )
   }
+  const presets = childCtx.get('agentPresets') as AgentPresets | undefined
+  if (presets === undefined) {
+    throw new Error(
+      `dh-subagent-preset: cannot bind continuable child onto preset "${presetId}" because the `
+      + "agent-presets service is not composed; aborting child creation instead of running it under the parent's preset",
+    )
+  }
+  // Re-link inside the creation window, mirroring the one-shot path's async
+  // setup. On rejection the child is cancelled (never silently left under the
+  // parent's composition) and the failure is surfaced loudly.
+  void presets.recompose(childCtx, presetId).catch((error: unknown) => {
+    childCtx.logger.error(
+      `dh-subagent-preset: failed to re-link continuable child onto preset "${presetId}"; `
+      + `cancelling the child instead of running it under the parent's preset: ${errorMessage(error)}`,
+    )
+    childCtx.agent?.cancel({ kind: 'parent' })
+  })
   return () => {}
 }
 
@@ -418,7 +416,8 @@ export function apply(ctx: Context): void {
   subagents.registerContinuableSetup(applyNamedPresetToContinuableChild)
 
   // Pre-warm each named preset's standing mount so a continuable child's
-  // re-link (fire-and-forget above) has nothing to mount at delegation time.
+  // re-link (started in the setup contribution above) has nothing to mount at
+  // delegation time.
   ctx.inject(['agentPresets'], (presetCtx: Context) => {
     for (const id of Object.keys(PRESET_BY_PROVIDER) as PresetId[]) {
       void (presetCtx.get('agentPresets') as unknown as AgentPresets).standingKeyFor(id).catch(
