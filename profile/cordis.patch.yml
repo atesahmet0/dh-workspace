@@ -1,0 +1,26 @@
+# dh-multiagents profile patch layer — Phase 2 scaffold (no live rows yet).
+#
+# Rows here override bundle rows by id (a patch replaces the WHOLE config of a
+# targeted row; later layers win). Layer order:
+#   bundle patches -> this file -> $DSH_HOME/cordis.patch.yml -> --patch
+#
+# Phase 9 will add user-plane overrides for the dh-multiagents bundle, e.g.:
+#
+# - id: dh-workspace
+#   config:
+#     # plan storage root, routing rules
+#
+# - id: dh-delegation
+#   config:
+#     # delegation backend knobs
+#
+# - id: dh-subagent-preset
+#   config:
+#     # preset -> provider bindings
+#
+# - id: dh-worktree
+#   config:
+#     # worktree root policy
+#
+# Remember: `!!js` expressions are evaluated in config/disabled fields
+# (globals: process, injected ctx.<service>, dshHomePath(...), baseUrl).

@@ -1,0 +1,28 @@
+{
+  "name": "@dh-multiagents/bundle",
+  "description": "Out-of-tree dsh plugin bundle: philosophy skills plus workspace, delegation, subagent-preset, and worktree plugins (naming contract in DESIGN.md)",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "rm -rf packages/*/lib"
+  },
+  "dependencies": {
+    "@dh-multiagents/dh-delegation": "workspace:*",
+    "@dh-multiagents/dh-philosophy": "workspace:*",
+    "@dh-multiagents/dh-subagent-preset": "workspace:*",
+    "@dh-multiagents/dh-worktree": "workspace:*",
+    "@dh-multiagents/dh-workspace": "workspace:*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

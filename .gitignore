@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# build output
+lib/
+dist/
+*.tsbuildinfo
+
+# environment
+.env
+.env.*
+!.env.example
+
+# harness state (session/skill/worktree scratch)
+.dsh/
+
+# tooling
+coverage/
+*.log
+.DS_Store

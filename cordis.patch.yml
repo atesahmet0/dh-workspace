@@ -1,0 +1,43 @@
+# dsh-multiagents bundle patch — Phase 2 scaffold.
+#
+# The bundle root declares this file in package.json under
+# `dsh.bundle.patch`. It is a normal Cordis patch applied as ONE insert over
+# the profile root (profile cordis.patch.yml / home / --patch overlays win per
+# row id afterwards).
+#
+# This file intentionally contains NO live rows yet. Phase 9 fills in the rows
+# below. Row ids and module names are the NAMING CONTRACT locked in DESIGN.md
+# and must be reused verbatim by every later phase.
+#
+# ---------------------------------------------------------------------------
+# Planned rows (commented placeholders — enable with real config in Phase 9):
+#
+# - id: dh-workspace
+#   name: '@dh-multiagents/dh-workspace'
+#   # registers tools: plan_save, plan_read
+#
+# - id: dh-delegation
+#   name: '@dh-multiagents/dh-delegation'
+#   # registers tools: delegate, delegation_read, delegation_list
+#
+# - id: dh-subagent-preset
+#   name: '@dh-multiagents/dh-subagent-preset'
+#   # registers SubagentProvider names:
+#   #   explore, researcher, coder, scribe, reviewer
+#
+# - id: dh-worktree
+#   name: '@dh-multiagents/dh-worktree'
+#   # registers tools: worktree_create, worktree_delete
+#
+# ---------------------------------------------------------------------------
+# dh-philosophy is a SKILL.md package, NOT a plugin: it has no cordis row here.
+# Its SKILL.md directories are surfaced through the skill-filesystem provider
+# (customSkillDirs / bundledSkillDir) in Phase 9, not through a plugin row.
+#
+# Phase 9 reminders (from the dsh API reference):
+# - A patch replaces a targeted row's WHOLE config; later layers win by id.
+# - Any row that publishes a process-global service must sit inside a
+#   `cordis:group` with `group: true` and an `isolate` realm, or
+#   dsh-agent-presets rejects the mount.
+# - `!!js` expressions are evaluated in `config`/`disabled` fields (globals:
+#   process, injected ctx.<service>, dshHomePath(...), baseUrl).

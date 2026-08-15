@@ -1,0 +1,14 @@
+# dh-multiagents settings document — Phase 2 scaffold (stub, no live keys yet).
+#
+# This is the user-settings YAML read by @deepseek-ai/dsh-settings-file
+# (defaults to $DSH_HOME/settings.yaml; hot-reloaded). Sections are keyed by
+# plugin/adapter id and override bundle-provided defaults.
+#
+# Phase 9 will add e.g.:
+#
+# llm-deepseek:
+#   reasoningEffort: max
+#
+# skill-filesystem:
+#   customSkillDirs:
+#     - <path-to-packages/dh-philosophy/skills>

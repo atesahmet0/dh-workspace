@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+
+# Dev-time peer policy for the dh-multiagents monorepo.
+# Every peer dependency is ALSO declared as a devDependency per package, so
+# typechecking is independent of peer auto-install behavior. Auto-install is
+# enabled so missing transitive peers (e.g. the dsh-tools peer family) resolve
+# without friction.
+autoInstallPeers: true

@@ -1,0 +1,14 @@
+{
+  "name": "dsh-profile-dh-multiagents",
+  "private": true,
+  "type": "module",
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@dh-multiagents/bundle"
+      ]
+    }
+  }
+}
