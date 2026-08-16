@@ -29,8 +29,10 @@
 
 # Sandbox policy (dsh-base row `sandbox-policy`). workspace-write lets the
 # `coder` child mutate the workspace; the read-only presets (plan/build/
-# explore/researcher/reviewer) rely on their toolFilter ALLOW-lists (bash/
-# edit/write absent) instead of the sandbox mode.
+# explore/researcher/reviewer) are narrowed at runtime by the capability
+# matrix (CAPABILITY_MATRIX + restrictPresetTools, dh-common) — they mount no
+# bash/edit/write tool rows in their agent.cordis.yml and their matrix rows
+# omit those names — not by the sandbox mode or any toolFilter key.
 - id: sandbox-policy
   name: '@deepseek-ai/dsh-sandbox-policy'
   config:

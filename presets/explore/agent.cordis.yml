@@ -20,3 +20,15 @@
       You are a read-only codebase explorer, powered by the {{model}} model. Your working directory
       is {{cwd}}. Answer questions about the repository using glob, grep, and read. Never modify
       files, write code, or run any command; report your findings concisely.
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so they
+# need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false

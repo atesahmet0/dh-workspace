@@ -445,10 +445,47 @@ function markPresetEnforced(childCtx: Context): void {
   PRESET_ENFORCED_CHILDREN.add(childCtx)
 }
 
+/** One agent's installed capability-matrix restriction, keyed by its context. */
+interface PresetRestriction {
+  readonly presetId: string
+  /** The exact disposer that lifts the restriction, for replacement on preset change. */
+  readonly dispose: () => void
+}
+
+/**
+ * The capability restrictions this module installed, keyed by the agent's
+ * context. A preset change REPLACES the old restriction instead of stacking a
+ * second one: `tools.restrict()` filters intersect across the scope chain, so
+ * leaving an earlier allow-list in place while applying the new preset's would
+ * strip exactly the new preset's exclusive tools (plan_save under build,
+ * worktree_create under plan, ...). WeakMap: entries die with their agents.
+ */
+const PRESET_RESTRICTIONS = new WeakMap<object, PresetRestriction>()
+
+/**
+ * Apply one preset's ALLOW-list to an agent, replacing any earlier restriction
+ * this module installed. Re-applying the same preset is a no-op: the
+ * restriction already is exactly that preset's allow-list, so stacking it
+ * would change nothing but the layer's restriction count.
+ */
+function applyPresetRestriction(agentCtx: Context, presetId: string): void {
+  const prior = PRESET_RESTRICTIONS.get(agentCtx)
+  if (prior !== undefined && prior.presetId === presetId) return
+  if (prior !== undefined) prior.dispose()
+  PRESET_RESTRICTIONS.set(agentCtx, { presetId, dispose: restrictPresetTools(agentCtx, presetId) })
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     'agent/created'(payload: { agent: AgentLike }): void
+    'agent-preset/selected'(sessionId: SessionIdBrand, agentPreset: string): void
   }
+}
+
+/** Whether an agent is a top-level root (no parent session, no delegation depth). */
+function isTopLevelRoot(agent: AgentLike): boolean {
+  const header = agent.session.header
+  return header.parentSession === undefined && delegationDepthOf(agent) <= 0
 }
 
 /**
@@ -459,13 +496,14 @@ declare module '@deepseek-ai/cordis' {
  * the web gateway composes it in its own setup, so neither toolset was ever
  * restricted before.
  *
- * A composed agent is restricted to its preset's ALLOW-list. A bare agent is
- * left preset-less: the headless runner publishes its top-level orchestrator
- * this way, and headless sessions are preset-less by design (README.md), so a
- * bare top-level root keeps the unrestricted global toolset instead of being
- * bound to a preset. Only a child that joined no preset is surfaced, so a
- * mis-wired harness fails loud instead of silently running a child
- * unrestricted.
+ * A composed agent is restricted to its preset's ALLOW-list (through
+ * {@link applyPresetRestriction}, so a later preset selection can replace the
+ * restriction). A bare agent is left preset-less: the headless runner
+ * publishes its top-level orchestrator this way, and headless sessions are
+ * preset-less by design (README.md), so a bare top-level root keeps the
+ * unrestricted global toolset instead of being bound to a preset. Only a child
+ * that joined no preset is surfaced, so a mis-wired harness fails loud instead
+ * of silently running a child unrestricted.
  */
 function enforcePresetOnCreated(ctx: Context, agent: AgentLike): void {
   // A child this plugin composed enforces its own preset in its setup window.
@@ -479,20 +517,62 @@ function enforcePresetOnCreated(ctx: Context, agent: AgentLike): void {
   if (composed !== undefined) {
     // Already composed: the web root (mounted in the gateway's setup) and
     // every harness-internal child that inherited a preset via composeFrom.
-    restrictPresetTools(agent.ctx, composed)
+    applyPresetRestriction(agent.ctx, composed)
     return
   }
   // Bare agent. The headless runner publishes the top-level orchestrator
   // without composing any preset; headless sessions are preset-less by design
   // (README.md), so a bare top-level root is left with the unrestricted
   // global toolset. Only a child that joined no preset is unexpected.
-  const header = agent.session.header
-  const isTopLevelRoot = header.parentSession === undefined && (header.delegationDepth ?? 0) <= 0
-  if (isTopLevelRoot) return
+  if (isTopLevelRoot(agent)) return
   ctx.logger.warn(
     `dh-subagent-preset: agent "${agent.id}" is a child but joined no preset; `
     + 'it stays bare with the unrestricted global toolset',
   )
+}
+
+/** The agent-registry surface this plugin reads to resolve a selection to its agent. */
+interface AgentRegistryLike {
+  get(sessionId: SessionIdBrand): AgentLike | undefined
+}
+
+/**
+ * Restrict a top-level orchestrator when the surface's preset switcher
+ * re-composes it. `agent/created` fires exactly once, at publication; a later
+ * selection that swaps the top-level agent's composition (the web gateway's
+ * `agentPresets.select`, api-proxy.ts) emits `agent-preset/selected` with no
+ * re-run of that hook, so without this listener a session switched onto a dh
+ * preset would keep whatever toolset it started with — a build orchestrator
+ * selected onto build would still see the cross-preset global tools
+ * (plan_save/plan_read) it had under its previous composition.
+ *
+ * Only TOP-LEVEL agents are gated: children composed by this plugin already
+ * enforce their preset's allow-list in their setup windows
+ * (PRESET_ENFORCED_CHILDREN), and re-restricting them here would stack with
+ * that restriction.
+ *
+ * A selection onto a FOREIGN preset (outside the capability matrix) lifts any
+ * restriction this module installed, so the foreign deployment governs the
+ * toolset from scratch instead of inheriting the previous dh allow-list.
+ */
+function enforceTopLevelPresetSelection(ctx: Context, sessionId: SessionIdBrand, agentPreset: string): void {
+  const agents = ctx.get('agents') as AgentRegistryLike | undefined
+  if (agents === undefined) return
+  const agent = agents.get(sessionId)
+  if (agent === undefined || !isTopLevelRoot(agent)) return
+  if (CAPABILITY_MATRIX[agentPreset] === undefined) {
+    // Foreign preset: its owning deployment governs its toolset, so any
+    // allow-list restriction this module installed for the prior dh preset
+    // must be disposed here — leaving it active would strip exactly the
+    // foreign preset's tools.
+    const prior = PRESET_RESTRICTIONS.get(agent.ctx)
+    if (prior !== undefined) {
+      prior.dispose()
+      PRESET_RESTRICTIONS.delete(agent.ctx)
+    }
+    return
+  }
+  applyPresetRestriction(agent.ctx, agentPreset)
 }
 
 // ---------------------------------------------------------------------------
@@ -514,6 +594,14 @@ export function apply(ctx: Context): void {
   // setup windows are skipped via the marker above.
   ctx.on('agent/created', ({ agent }) => {
     enforcePresetOnCreated(ctx, agent)
+  })
+
+  // Preset selection: the surface's switcher re-composes a TOP-LEVEL agent
+  // after `agent/created` has already run, so re-apply the capability matrix
+  // to the preset the selection committed. Children are skipped inside the
+  // handler (their setups own their restrictions).
+  ctx.on('agent-preset/selected', (sessionId, agentPreset) => {
+    enforceTopLevelPresetSelection(ctx, sessionId, agentPreset)
   })
 
   // Pre-warm EVERY matrix preset's standing mount so a continuable child's

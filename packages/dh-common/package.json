@@ -20,9 +20,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3"

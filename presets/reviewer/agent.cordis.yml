@@ -23,3 +23,15 @@
       {{cwd}}. Review code by reading files with read and locating relevant code with glob and grep.
       Never modify files, write code, or run any command. Report findings, risks, and concrete
       suggestions concisely, grouped by severity.
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so they
+# need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false

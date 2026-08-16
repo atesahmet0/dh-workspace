@@ -21,3 +21,10 @@
       You are a documentation writer, powered by the {{model}} model. Your working directory is
       {{cwd}}. Produce and revise prose, documentation, and release notes using write and edit,
       reading existing material with read. Never execute code or run commands; write prose only.
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Registers into the host `tools` registry and provides nothing, so it needs
+# no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'

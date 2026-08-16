@@ -7,7 +7,8 @@
  * the tool boundary (Parse-Don't-Validate), every joined path is resolved and
  * realpath-canonicalized, and asserted to stay under the workspace root before
  * it can reach the fs. The capability matrix maps each agent preset to its
- * ALLOW-list of global tool names and enforces it per agent scope.
+ * ALLOW-list of tool names (global dh tools plus agent-plane base tools) and
+ * enforces it per agent scope.
  *
  * @module @dh-multiagents/dh-common
  */
@@ -15,6 +16,7 @@
 import { mkdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { scopeOf } from '@deepseek-ai/dsh-scope'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 // ---------------------------------------------------------------------------
@@ -188,14 +190,21 @@ export function delegationDepthOf(agent: {
 // ---------------------------------------------------------------------------
 
 /**
- * The per-agent capability matrix: each preset's ALLOW-list of global tool
- * names. Every name was verified against the deployment's actual global
- * toolset (`bash, create_goal, delegate, delegation_list, delegation_read,
- * edit, exit_plan_mode, get_goal, glob, grep, interrupt_agent, job_kill,
- * job_list, job_output, list_agents, plan_read, plan_save, ralph, read,
- * read_image, send_message, skill, str_replace_editor, subagent,
- * subagent_fork, todo_write, update_goal, web_search, workflow,
- * worktree_create, worktree_delete, write`).
+ * The per-agent capability matrix: each preset's ALLOW-list of tool names,
+ * spanning the two mounting planes this deployment uses.
+ *
+ * Only the dh tools are GLOBAL (mounted unconditionally): the delegation,
+ * goal, and planning surface (`delegate`, `delegation_list`,
+ * `delegation_read`, `plan_read`, `plan_save`, `create_goal`, `get_goal`,
+ * `update_goal`, `exit_plan_mode`, `interrupt_agent`, `list_agents`,
+ * `ask_user_question`, `send_message`, `subagent`, `subagent_fork`) plus the
+ * worktree pair (`worktree_create`, `worktree_delete`). The base tools
+ * (`bash`, `read`, `write`, `edit`, `glob`, `grep`, `read_image`,
+ * `str_replace_editor`, `skill`, `todo_write`, `web_search`) are mounted on
+ * the AGENT PLANE — the per-preset ancestor layer — on web hosts, so a
+ * preset's allow-list mixes the two planes and `restrictPresetTools` must
+ * resolve names through the agent's inherited scope view rather than the bare
+ * global layer.
  *
  * Deliberately excluded from EVERY preset: the incidental tools `ralph`,
  * `workflow`, and `job_*` (job_kill/job_list/job_output) are not part of the
@@ -209,7 +218,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<string, readonly string[]>> = {
     'plan_save', 'plan_read',
     'delegate', 'delegation_read', 'delegation_list',
     'subagent', 'subagent_fork',
-    'send_message', 'interrupt_agent', 'list_agents',
+    'ask_user_question', 'send_message', 'interrupt_agent', 'list_agents',
     'skill', 'todo_write',
     'create_goal', 'get_goal', 'update_goal', 'exit_plan_mode',
   ],
@@ -217,7 +226,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<string, readonly string[]>> = {
   build: [
     'delegate', 'delegation_read', 'delegation_list',
     'subagent', 'subagent_fork',
-    'send_message', 'interrupt_agent', 'list_agents',
+    'ask_user_question', 'send_message', 'interrupt_agent', 'list_agents',
     'worktree_create', 'worktree_delete',
     'skill', 'todo_write',
   ],
@@ -254,8 +263,11 @@ export interface ToolRegistryLike {
  * `ToolRuntime.view` is declared `private` in dsh-tools (a compile-time-only
  * modifier), so `ToolRegistryLike` cannot name it without breaking the real
  * `ToolRuntime`'s structural assignability; it is read here through a narrow
- * cast. `view(undefined)` yields the GLOBAL toolset's `restrictableNames` (the
- * set of names `restrict()` accepts).
+ * cast. `view(scope)` yields the restrictable surface for `scope`: the set of
+ * names `tools.restrict()` accepts when applied through a context of that
+ * scope. Passing the AGENT's own scope key (`scopeOf(agentCtx)`) returns the
+ * agent's inherited surface — global plus ancestor preset layers — while
+ * `undefined` returns only the global layer.
  */
 interface ToolScopeViewLike {
   view?(scope: unknown): { readonly restrictableNames: ReadonlySet<string> } | undefined
@@ -271,9 +283,10 @@ export interface ScopedAgentCtxLike {
 /**
  * Applies the capability-matrix restriction for a known preset to `agentCtx.tools`.
  *
- * The matrix allow-list is filtered against the tools this deployment exposes as
- * GLOBAL (and therefore restrictable). Names that exist only in the agent's own
- * scope layer (per-agent registrations) are not restrictable — `tools.restrict()`
+ * The matrix allow-list is filtered against the tools this deployment exposes
+ * to the agent as INHERITED (global plus ancestor preset layers, and therefore
+ * restrictable). Names that exist only in the agent's own scope layer
+ * (per-agent registrations) are not restrictable — `tools.restrict()`
  * would throw on them — so they are skipped with a warning instead of aborting
  * child creation. Foreign presets pass through unrestricted. A matrix entry with
  * an empty allow-list is a configuration bug and still throws. A preset whose
@@ -295,7 +308,14 @@ export function restrictPresetTools(agentCtx: ScopedAgentCtxLike, presetName: st
       + 'refusing to hide every global tool (capability matrix is misconfigured)',
     )
   }
-  const restrictable = (agentCtx.tools as unknown as ToolScopeViewLike).view?.(undefined)?.restrictableNames
+  // Read the AGENT's own scope view, not the global one: `view(scope)` returns
+  // the surface `tools.restrict()` accepts for that scope — global plus ancestor
+  // preset layers — while `view(undefined)` sees only global-layer tools. On
+  // hosts that mount base tools on the agent plane (preset ancestor layers),
+  // the global view misses them and every allow-list filters to empty. An
+  // unscoped context (`scopeOf` → undefined/null) keeps the old global view.
+  const scope = scopeOf(agentCtx as unknown as Parameters<typeof scopeOf>[0]) ?? undefined
+  const restrictable = (agentCtx.tools as unknown as ToolScopeViewLike).view?.(scope)?.restrictableNames
   if (restrictable === undefined) {
     // Older harness without a scope view: preserve prior behavior, but never crash child creation.
     try {

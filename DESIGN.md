@@ -51,35 +51,75 @@ profile manifest are `private: true`.
 
 Reserved: the name `run_code` cannot be registered.
 
+These are the **dh-multiagents-owned global tools**: registered by the dh
+plugins (§2) into the deployment-wide global toolset and inherited by every
+preset at runtime. They are distinct from the dsh **base tools**, which on the
+web host are NOT global — the web-app bundle disables them at the host level and
+moves them to the agent plane, where each preset's `agent.cordis.yml` mounts the
+rows it needs (§4). On TUI/headless hosts the base tools may remain global.
+
 ## 4. Agent presets
 
 Preset names (7): **`plan`, `build`, `explore`, `researcher`, `coder`, `scribe`,
 `reviewer`**.
 
 Each preset is a **directory** named after the preset, containing exactly:
-- `agent.cordis.yml` — the agent-plane composition. In the current
-  implementation this holds **only** a single standing `persona` mount (the
-  `@deepseek-ai/dsh-persona` plugin with the preset's role text); there are no
-  per-preset plugin rows, `cordis:group` blocks, or `toolFilter` keys.
+- `agent.cordis.yml` — the agent-plane composition. Each one mounts the
+  standing `persona` (`@deepseek-ai/dsh-persona`, the preset's role text) PLUS
+  the base tool-plugin rows that preset's agents need. There are **no**
+  `toolFilter` keys; per-preset capability is enforced at runtime (see
+  "Runtime narrowing" below).
 - `preset.yml` — metadata: `name`, `description`, `order`.
 
-Tool registration and per-preset restriction are decoupled in the current
-implementation:
+The mounted base tool rows (exact `id`s, per preset):
 
-- **Tools are registered globally**, not per preset. The dh-multiagents plugin
-  rows (`dh-workspace`, `dh-delegation`, `dh-subagent-preset`, `dh-worktree`)
-  are inserted in the root `cordis.patch.yml` (§2) and their tools
+| Preset | `persona` + base tool rows in `agent.cordis.yml` |
+|---|---|
+| `plan` | `persona`; `tool-subagent` (spawn), `tool-subagent-fork`, `tool-subagent-control`, `tool-subagent-list-agents`; `tool-ask-user`, `tool-skill`, `tool-todo`; `tool-goal`; `planning` group (`cordis:group`) → `plan-mode` |
+| `build` | `persona`; `tool-subagent` (spawn), `tool-subagent-fork`, `tool-subagent-control`, `tool-subagent-list-agents`; `tool-ask-user`, `tool-skill`, `tool-todo` |
+| `explore` | `persona`; `tool-fs`, `tool-fs-search` |
+| `researcher` | `persona`; `tool-web`; `tool-fs`, `tool-fs-search` |
+| `coder` | `persona`; `tool-bash`; `tool-fs`, `tool-fs-search`; `tool-str-replace-editor`; `tool-skill`, `tool-todo` |
+| `scribe` | `persona`; `tool-fs` |
+| `reviewer` | `persona`; `tool-fs`, `tool-fs-search` |
+
+Tool registration and per-preset restriction span two planes:
+
+- **Base tools are agent-plane (per-preset), not global.** On web hosts the
+  dsh base tools (`tool-fs`, `tool-fs-search`, `tool-web`, `tool-bash`,
+  `tool-str-replace-editor`, `tool-subagent`/`tool-subagent-fork`/
+  `tool-subagent-control`/`tool-subagent-list-agents`, `tool-ask-user`,
+  `tool-skill`, `tool-todo`, `tool-goal`, `plan-mode`) are **not** part of the
+  deployment-wide global toolset — the web-app bundle disables them at the host
+  level and moves them to the agent plane. Mounting them as rows in each
+  preset's `agent.cordis.yml` is what makes them available to dh-multiagents
+  agents on the web host. On TUI/headless hosts the base tools may remain
+  global; the per-preset mounts are what guarantee availability on the web host.
+- **dh-multiagents-owned tools are global, unchanged.** The dh plugin rows
+  (`dh-workspace`, `dh-delegation`, `dh-subagent-preset`, `dh-worktree`) are
+  inserted in the root `cordis.patch.yml` (§2) and their tools
   (`plan_save`/`plan_read`, `delegate`/`delegation_read`/`delegation_list`,
-  `worktree_create`/`worktree_delete`) become part of the deployment-wide global
+  `worktree_create`/`worktree_delete`) remain part of the deployment-wide global
   toolset. No preset file lists any of these rows.
-- **Per-preset capability is enforced at runtime** by `CAPABILITY_MATRIX` +
-  `restrictPresetTools` (`packages/dh-common/src/index.ts`), applied when a
-  child is composed in `dh-subagent-preset`. The matrix maps each preset to its
-  ALLOW-list of global tool names; `restrictPresetTools` filters that list to
-  the tools the deployment exposes as restrictable globals and calls
-  `tools.restrict({ allow })`, so e.g. a `plan` child physically cannot run
-  `bash`. Names that are not restrictable (agent-local, not global) are skipped
-  with a warning rather than throwing.
+
+**Runtime narrowing** is enforced by `CAPABILITY_MATRIX` +
+`restrictPresetTools` (`packages/dh-common/src/index.ts`), applied when a child
+is composed in `dh-subagent-preset`. The matrix maps each preset to its
+ALLOW-list of tool names. `restrictPresetTools` reads the restriction surface
+through the agent's **own scope view** (`scopeOf(agentCtx)`), which yields the
+global layer **plus** ancestor preset layers, filters the matrix allow-list to
+the names that surface is actually restrictable on, and calls
+`tools.restrict({ allow })`. Because the restriction runs against that
+inherited surface, it strips **both** the global dh tools that are not in the
+matrix allow-list **and** any base tool rows over-granted by the preset's own
+`agent.cordis.yml` mount. So e.g. a `plan` child physically cannot run `bash`
+even though `tool-bash` is global on a TUI host, and an `explore` child cannot
+run `delegate` even though it is global and `explore` mounts only fs rows.
+Names that are not restrictable (agent-local) are skipped with a warning rather
+than throwing; foreign presets pass through unrestricted. Top-level
+orchestrators are likewise restricted on preset selection via the
+`agent-preset/selected` config, so the same matrix narrows the top-level session
+to the chosen preset's tools.
 - **The delegation-role boundary is enforced in `dh-delegation`.** The
   `delegate` tool checks the caller's composed preset against
   `DELEGATION_ROLES_BY_CALLER_PRESET` (plan → explore/researcher; build →

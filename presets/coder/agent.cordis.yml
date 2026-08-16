@@ -23,3 +23,46 @@
       implementation against its checklist, and refactor if any principle is violated. Implement
       with bash, edit, and write; inspect with glob, grep, and read. Isolate your work in a git
       worktree with worktree_create when delegated.
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# The shell executors (`bash-sandbox`) and the host environment stay on the
+# HOST plane; only the model-facing tool is per-session.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so they
+# need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── str_replace_editor ──────────────────────────────────────────────────────
+
+# The string-replace editor resolves the host `fs` service and requires
+# absolute paths; it registers the `str_replace_editor` tool.
+- id: tool-str-replace-editor
+  name: '@deepseek-ai/dsh-tool-str-replace-editor'
+  config:
+    maxOutputChars: 16000
+
+# ── skills ──────────────────────────────────────────────────────────────────
+
+# The skill REGISTRY lives in the host composition and is layered per scope;
+# this row registers into THIS preset's layer of it, so it needs no realm.
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── tasks ───────────────────────────────────────────────────────────────────
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true

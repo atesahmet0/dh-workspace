@@ -24,3 +24,41 @@
       implementation to the "coder" subagent, documentation to the "scribe" subagent, and review to
       the "reviewer" subagent. Isolate parallel work streams with worktree_create and track their
       state with delegation_read and delegation_list.
+
+# ── delegation ──────────────────────────────────────────────────────────────
+
+# The `subagents` registry and its spawn/fork backends live in the HOST
+# composition; these rows contribute the model-facing delegation TOOLS, which
+# resolve that host registry.
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: continuable
+
+- id: tool-subagent-control
+  name: '@deepseek-ai/dsh-tool-subagent-control'
+
+- id: tool-subagent-list-agents
+  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+# ── interaction / skills / tasks ────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
