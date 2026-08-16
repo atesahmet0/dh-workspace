@@ -10,8 +10,8 @@
  * `agentPresets.recompose(childCtx, '<preset>')` in the agent factory's
  * `setup` hook.
  *
- * The dsh subagent seam types (`@deepseek-ai/dsh-subagent`) are not declared
- * as dependencies of this bundle, so the provider contracts are mirrored here
+ * The dsh subagent seam types (`@deepseek-ai/dsh-subagent`) are declared as
+ * peer dependencies of this bundle; the provider contracts are mirrored here
  * as structural types. They match the published `0.1.0-rc.6` surface; keep the
  * two in sync when upgrading.
  *
@@ -125,7 +125,6 @@ interface AgentPresets {
   composedPreset(agentCtx: Context): string | undefined
   recompose(agentCtx: Context, id: string): Promise<unknown>
   standingKeyFor(id?: string): Promise<unknown>
-  readonly defaultId: string
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +458,14 @@ declare module '@deepseek-ai/cordis' {
  * headless runner publishes the TOP-LEVEL agent bare (no preset composed) and
  * the web gateway composes it in its own setup, so neither toolset was ever
  * restricted before.
+ *
+ * A composed agent is restricted to its preset's ALLOW-list. A bare agent is
+ * left preset-less: the headless runner publishes its top-level orchestrator
+ * this way, and headless sessions are preset-less by design (README.md), so a
+ * bare top-level root keeps the unrestricted global toolset instead of being
+ * bound to a preset. Only a child that joined no preset is surfaced, so a
+ * mis-wired harness fails loud instead of silently running a child
+ * unrestricted.
  */
 function enforcePresetOnCreated(ctx: Context, agent: AgentLike): void {
   // A child this plugin composed enforces its own preset in its setup window.
@@ -476,52 +483,16 @@ function enforcePresetOnCreated(ctx: Context, agent: AgentLike): void {
     return
   }
   // Bare agent. The headless runner publishes the top-level orchestrator
-  // without composing any preset, so bind the deployment default (plan) both
-  // to run its persona and to make the orchestrator delegation-eligible.
+  // without composing any preset; headless sessions are preset-less by design
+  // (README.md), so a bare top-level root is left with the unrestricted
+  // global toolset. Only a child that joined no preset is unexpected.
   const header = agent.session.header
   const isTopLevelRoot = header.parentSession === undefined && (header.delegationDepth ?? 0) <= 0
-  if (!isTopLevelRoot) {
-    ctx.logger.warn(
-      `dh-subagent-preset: agent "${agent.id}" is a child but joined no preset; `
-      + 'it stays bare with the unrestricted global toolset',
-    )
-    return
-  }
-  const defaultId = presets.defaultId
-  // Synchronous: applies before `agent/session-start` and the first prompt
-  // assembly, so the matrix gates the model even if the re-link is pending.
-  restrictPresetTools(agent.ctx, defaultId)
-  void bindBareRootToDefault(agent, presets, defaultId)
-}
-
-/**
- * Best-effort re-link of a bare top-level agent onto the deployment default
- * preset. `agent/created` is a synchronous emit, so the re-link cannot be
- * awaited inside it; it resolves within a few microtasks (the standing mount
- * is pre-warmed at boot), long before the first model turn executes. The
- * synchronous restriction in `enforcePresetOnCreated` is the deterministic
- * gate; this re-link only adds the preset's persona and delegation eligibility.
- */
-async function bindBareRootToDefault(agent: AgentLike, presets: AgentPresets, presetId: string): Promise<void> {
-  try {
-    // Blank-only contract (the harness's own definition: a session is blank
-    // until its first `turn/start`; the policy seed events a fresh session
-    // carries are not production). Never swap a composition that already
-    // produced a turn — the synchronous restriction above still holds.
-    if (agent.session.events.some(event => event.type === 'turn/start')) {
-      agent.ctx.logger.warn(
-        `dh-subagent-preset: top-level agent "${agent.id}" produced a turn before the default preset `
-        + `could be bound; it stays bare but remains restricted to "${presetId}"'s allow-list`,
-      )
-      return
-    }
-    await presets.recompose(agent.ctx, presetId)
-  } catch (error: unknown) {
-    agent.ctx.logger.error(
-      `dh-subagent-preset: failed to bind top-level agent "${agent.id}" onto preset "${presetId}"; `
-      + `it stays bare but remains restricted to the preset's allow-list: ${errorMessage(error)}`,
-    )
-  }
+  if (isTopLevelRoot) return
+  ctx.logger.warn(
+    `dh-subagent-preset: agent "${agent.id}" is a child but joined no preset; `
+    + 'it stays bare with the unrestricted global toolset',
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -545,9 +516,8 @@ export function apply(ctx: Context): void {
     enforcePresetOnCreated(ctx, agent)
   })
 
-  // Pre-warm EVERY matrix preset's standing mount so a top-level agent's
-  // re-link (started in the `agent/created` hook) and a continuable child's
-  // re-link (started in the setup contribution above) have nothing to mount at
+  // Pre-warm EVERY matrix preset's standing mount so a continuable child's
+  // re-link (started in the setup contribution above) has nothing to mount at
   // delegation time.
   ctx.inject(['agentPresets'], (presetCtx: Context) => {
     for (const id of Object.keys(CAPABILITY_MATRIX)) {

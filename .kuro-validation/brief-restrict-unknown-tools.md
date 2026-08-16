@@ -1,3 +1,10 @@
+> **STATUS: RESOLVED in current code (and compiled `lib/`).** The bug described
+> below is fixed: `restrictPresetTools` now filters the matrix allow-list to the
+> deployment's `restrictableNames` and skips non-restrictable (agent-local) tools
+> with a warning instead of throwing; `confinePath` uses `realpathLoose` so a
+> not-yet-created workspace dir no longer surfaces a raw `ENOENT`. This file is
+> retained as an archival record of the bug and its fix.
+
 # Issue: subagent creation dies with `tools.restrict() names unknown global tools`
 
 ## Bug report (user, ds-workspace runtime)

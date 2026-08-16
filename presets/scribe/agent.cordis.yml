@@ -8,8 +8,10 @@
 # Persona: docs/prose only. No bash, no search, no skills, no delegation.
 #
 # SECURITY: NO bash. Also absent: read_image/glob/grep/str_replace_editor/
-# pwsh/workflow/ralph/worktree_*. The toolFilter hides the non-granted tools
-# that dsh-tool-fs also registers (read_image).
+# pwsh/workflow/ralph/worktree_*. These are hidden by the runtime allow-list
+# restriction: restrictPresetTools applies the scribe row of CAPABILITY_MATRIX
+# (edit/write/read only) to the composed child, so non-granted global tools are
+# not exposed to the agent even though the harness registers them.
 # ---------------------------------------------------------------------------
 
 - id: persona

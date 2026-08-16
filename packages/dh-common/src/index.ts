@@ -26,10 +26,30 @@ export function dshHome(): string {
   return process.env.DSH_HOME ?? join(homedir(), '.dsh')
 }
 
-/** The project id: explicit param, else the basename of the session cwd. */
+/** Fallback project id when the session cwd yields no usable name. */
+const DEFAULT_PROJECT_ID = 'workspace'
+
+/**
+ * Coerce a cwd basename into a safe single-segment project id: characters
+ * outside `[A-Za-z0-9._-]` become `-` (collapsed and trimmed), and a result
+ * that is empty or resolves to `.`/`..` falls back to {@link DEFAULT_PROJECT_ID}
+ * so an unusual cwd never crashes `parseProjectId` downstream.
+ */
+function safeProjectIdFromBasename(cwdName: string): string {
+  const sanitized = cwdName
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (sanitized === '' || sanitized === '.' || sanitized === '..') {
+    return DEFAULT_PROJECT_ID
+  }
+  return sanitized
+}
+
+/** The project id: explicit param, else the sanitized basename of the session cwd. */
 export function projectIdOf(exec: ToolRunContext): string {
   const cwd = exec.agent?.session.header.cwd ?? process.cwd()
-  return basename(cwd)
+  return safeProjectIdFromBasename(basename(cwd))
 }
 
 /** The confined workspace root (`$DSH_HOME/workspace`). */
@@ -52,15 +72,23 @@ function realWorkspaceRoot(): string {
 /**
  * Boundary parser for a caller-supplied project id. Rejects anything that
  * could traverse out of the workspace root: the id must be a single safe path
- * segment, and the resolved workspace-relative path must stay under
- * `$DSH_HOME/workspace`.
+ * segment that names a real subdirectory — empty, `.`/`..`, and anything
+ * resolving to the workspace root itself are refused, and the resolved
+ * workspace-relative path must stay strictly under `$DSH_HOME/workspace`.
  */
 export function parseProjectId(input: string): string {
+  if (input.trim() === '') {
+    throw new Error(`projectId must not be empty, got ${JSON.stringify(input)}`)
+  }
+  if (input === '.' || input === '..') {
+    throw new Error(`projectId ${JSON.stringify(input)} does not name a project directory under $DSH_HOME/workspace`)
+  }
   if (!/^[A-Za-z0-9._-]+$/.test(input)) {
     throw new Error(`projectId must match ^[A-Za-z0-9._-]+$, got ${JSON.stringify(input)}`)
   }
   const root = workspaceRoot()
-  if (!isWithin(root, resolve(root, input))) {
+  const resolved = resolve(root, input)
+  if (resolved === root || !isWithin(root, resolved)) {
     throw new Error(`projectId ${JSON.stringify(input)} resolves outside $DSH_HOME/workspace`)
   }
   return input
@@ -142,11 +170,17 @@ export function errorMessage(error: unknown): string {
   return String(error)
 }
 
-/** Read an agent's persisted delegation depth; absence means top-level. */
+/**
+ * Read an agent's delegation depth: the persisted header value, deepened by
+ * any runtime subagent-depth override (the option can only ever deepen the
+ * count, never lower it). Absence of both means top-level.
+ */
 export function delegationDepthOf(agent: {
   readonly session: { readonly header: { readonly delegationDepth?: number } }
+  readonly options?: unknown
 }): number {
-  return agent.session.header.delegationDepth ?? 0
+  const runtimeDepth = (agent.options as { readonly subagentDepth?: number } | undefined)?.subagentDepth ?? 0
+  return Math.max(agent.session.header.delegationDepth ?? 0, runtimeDepth)
 }
 
 // ---------------------------------------------------------------------------

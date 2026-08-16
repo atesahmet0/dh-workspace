@@ -11,7 +11,7 @@
  * @module @dh-multiagents/dh-delegation
  */
 
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -77,6 +77,14 @@ interface SubagentEndInfo {
   readonly lastAssistantMessage?: readonly ContentBlockLike[]
 }
 
+// The harness's real seam declares this event with a scoped `this` receiver:
+//   'subagent/end'(this: Scoped<SubagentRuntime>, info: SubagentRunEndInfo): void
+// (`Scoped` lives in @deepseek-ai/dsh-scope and `SubagentRuntime`/`SubagentRunEndInfo`
+// in @deepseek-ai/dsh-subagent; see the dsh-reference clone's
+// packages/subagent/subagent/src/index.ts). Neither type is importable from this
+// package's dependency graph, so `SubagentEndInfo` (a structural match of
+// `SubagentRunEndInfo`) stands in and the `this` receiver is dropped.
+// TODO: re-sync this augmentation with the harness seam once those types are importable.
 declare module '@deepseek-ai/cordis' {
   interface Events {
     'subagent/end'(info: SubagentEndInfo): void
@@ -145,11 +153,9 @@ interface DelegationRecord {
   readonly childId: string
 }
 
-/** Write the record markdown (frontmatter + prompt/result bodies) and the result file. */
-async function writeRecord(projectId: string, record: DelegationRecord, result: string): Promise<void> {
-  const dir = delegationsDir(projectId)
-  await mkdir(dir, { recursive: true })
-  const markdown = [
+/** Render the record markdown (frontmatter + prompt/result bodies). */
+function renderRecordMarkdown(record: DelegationRecord, result: string): string {
+  return [
     '---',
     `id: ${record.id}`,
     `agent: ${record.agent}`,
@@ -169,18 +175,58 @@ async function writeRecord(projectId: string, record: DelegationRecord, result: 
     result,
     '',
   ].join('\n')
-  await writeFile(join(dir, `${record.id}.md`), markdown, 'utf8')
+}
+
+/** Write the record markdown (frontmatter + prompt/result bodies) and the result file. */
+async function writeRecord(projectId: string, record: DelegationRecord, result: string): Promise<void> {
+  const dir = delegationsDir(projectId)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, `${record.id}.md`), renderRecordMarkdown(record, result), 'utf8')
   await writeFile(record.resultPath, result, 'utf8')
 }
 
-/** Whether a delegation id is already taken in the project directory. */
-async function recordExists(projectId: string, id: string): Promise<boolean> {
+/**
+ * Create the delegation record atomically: the `.md` file is created with the
+ * exclusive `wx` flag, so a concurrent caller that mints the same id fails with
+ * `EEXIST` instead of silently overwriting the record.
+ */
+async function createRecord(projectId: string, record: DelegationRecord): Promise<void> {
+  const dir = delegationsDir(projectId)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, `${record.id}.md`), renderRecordMarkdown(record, ''), {
+    encoding: 'utf8',
+    flag: 'wx',
+  })
   try {
-    await readFile(join(delegationsDir(projectId), `${id}.md`), 'utf8')
-    return true
+    await writeFile(record.resultPath, '', 'utf8')
   } catch (error: unknown) {
-    if (isMissingDir(error)) return false
+    // A `running` `.md` with no result file is a stale orphan; unlink it
+    // best-effort so `mintDelegationRecord`'s EEXIST retry loop never leaves
+    // it behind, then rethrow so the collision check still sees this failure.
+    await unlink(join(dir, `${record.id}.md`)).catch(() => {})
     throw error
+  }
+}
+
+/**
+ * Mint a readable delegation id by creating its record atomically. On an
+ * `EEXIST` collision (another concurrent delegation won the id) a fresh id is
+ * retried, so creation is race-free without a check-then-act window.
+ */
+async function mintDelegationRecord(
+  projectId: string,
+  makeRecord: (id: string) => DelegationRecord,
+): Promise<DelegationRecord> {
+  for (;;) {
+    const id = readableDelegationId()
+    const record = makeRecord(id)
+    try {
+      await createRecord(projectId, record)
+      return record
+    } catch (error: unknown) {
+      // Another concurrent delegation won this id; loop and mint a fresh one.
+      if (!isFileExists(error)) throw error
+    }
   }
 }
 
@@ -257,22 +303,105 @@ async function updateRecordStatus(projectId: string, id: string, status: string,
 // Child helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve once `subagent/end` fires for exactly one child. */
-function awaitSubagentEnd(ctx: Context, childId: string, signal: AbortSignal): Promise<SubagentEndInfo> {
-  return new Promise<SubagentEndInfo>((resolve, reject) => {
-    let dispose: () => void = () => {}
-    const onAbort = (): void => {
-      dispose()
-      reject(new Error(`delegate: waiting for subagent "${childId}" was aborted`))
+/**
+ * Buffered observer for `subagent/end` lifecycle events. Events are captured
+ * the moment they fire — before any awaited child-start or record write — so
+ * an early settlement can never be missed, then reconciled against the child
+ * id once `startContinuable` has returned it. The buffer is pruned to the
+ * known child id as soon as `waitFor` learns it, so unrelated children's
+ * payloads are not retained for the watcher's lifetime.
+ */
+interface SubagentEndWatcher {
+  /** Resolve once `subagent/end` fires for `childId`, draining any buffered event. */
+  waitFor(childId: string, signal?: AbortSignal): Promise<SubagentEndInfo>
+  /** Stop observing and reject every still-pending wait. */
+  dispose(): void
+}
+
+/**
+ * Verified `subagent/end` runtime semantics, so the per-turn assumption is not
+ * reintroduced:
+ *
+ * - The event fires exactly ONCE per residency epoch, at that epoch's terminal
+ *   disposal — never at an ordinary turn boundary. A resident epoch can run
+ *   many turns and still emit a single `subagent/end`.
+ * - `info.id` is the persistent child session id and equals the `childId`
+ *   returned by `startContinuable`; `info.runId` is a per-epoch identifier.
+ * - A later `followup` after disposal cold-resumes a NEW epoch that emits a
+ *   SECOND `subagent/end` with the same `id` but a new `runId`. This watcher
+ *   disposes after the first end, so the delegation record correctly reflects
+ *   the first epoch's result.
+ * - `stopReason !== 'completed'` (e.g. `max-tokens`, `aborted`, `refusal`,
+ *   `error`) still permits a later cold-resume; only `completed` means the
+ *   child will do no further work unless sent more.
+ */
+function watchSubagentEnds(ctx: Context): SubagentEndWatcher {
+  const buffered = new Map<string, SubagentEndInfo>()
+  const pending = new Map<string, {
+    readonly resolve: (info: SubagentEndInfo) => void
+    readonly reject: (error: Error) => void
+  }>()
+  // The watcher tracks one child per delegation. Until its id is known the
+  // listener buffers every end event so a fast-settling child is never missed;
+  // once known (first `waitFor`), unrelated buffered payloads are pruned and
+  // further non-matching events are dropped.
+  let knownChildId: string | undefined
+  const off = ctx.on('subagent/end', (info) => {
+    if (knownChildId !== undefined && info.id !== knownChildId) return
+    const waiter = pending.get(info.id)
+    if (waiter !== undefined) {
+      pending.delete(info.id)
+      waiter.resolve(info)
+    } else {
+      buffered.set(info.id, info)
     }
-    dispose = ctx.on('subagent/end', (info) => {
-      if (info.id !== childId) return
-      dispose()
-      signal.removeEventListener('abort', onAbort)
-      resolve(info)
-    })
-    signal.addEventListener('abort', onAbort, { once: true })
   })
+  return {
+    waitFor(childId, signal) {
+      knownChildId = childId
+      for (const id of buffered.keys()) {
+        if (id !== childId) buffered.delete(id)
+      }
+      return new Promise<SubagentEndInfo>((resolve, reject) => {
+        let settled = false
+        const rejectOnce = (error: Error): void => {
+          if (settled) return
+          settled = true
+          signal?.removeEventListener('abort', onAbort)
+          pending.delete(childId)
+          reject(error)
+        }
+        const onAbort = (): void => {
+          rejectOnce(new Error(`delegate: waiting for subagent "${childId}" was aborted`))
+        }
+        const resolveOnce = (info: SubagentEndInfo): void => {
+          if (settled) return
+          settled = true
+          signal?.removeEventListener('abort', onAbort)
+          resolve(info)
+        }
+        if (signal?.aborted === true) {
+          onAbort()
+          return
+        }
+        const already = buffered.get(childId)
+        if (already !== undefined) {
+          buffered.delete(childId)
+          resolveOnce(already)
+          return
+        }
+        pending.set(childId, { resolve: resolveOnce, reject: rejectOnce })
+        signal?.addEventListener('abort', onAbort, { once: true })
+      })
+    },
+    dispose() {
+      off()
+      for (const [childId, waiter] of pending) {
+        waiter.reject(new Error(`delegate: waiting for subagent "${childId}" was cancelled`))
+      }
+      pending.clear()
+    },
+  }
 }
 
 /** Render content blocks to plain text for persistence. */
@@ -293,6 +422,43 @@ async function liveOutputOf(ctx: Context, childId: string): Promise<string> {
 /** Normalize a stop reason into a record status. */
 function statusOf(stopReason: string): string {
   return stopReason === 'completed' ? 'completed' : stopReason
+}
+
+/**
+ * Run one fire-and-forget finalizer. Every failure is contained (logged, never
+ * rethrown), so background settlement can never leave an unhandled rejection
+ * that crashes the host.
+ */
+function runFinalizer(ctx: Context, label: string, work: () => Promise<void>): void {
+  void (async () => {
+    try {
+      await work()
+    } catch (error: unknown) {
+      ctx.logger.warn(`dh-delegation: ${label} failed: ${errorMessage(error)}`)
+    }
+  })()
+}
+
+/**
+ * Stamp a terminal status on a sync delegation whose awaited child promise
+ * rejected, so the record never stays `running`. A failure to stamp is logged,
+ * never raised: the original child error is the one that must propagate.
+ */
+async function persistSyncFailure(
+  ctx: Context,
+  projectId: string,
+  id: string,
+  signal: AbortSignal,
+  error: unknown,
+): Promise<void> {
+  const status = signal.aborted ? 'aborted' : 'error'
+  try {
+    await updateRecordStatus(projectId, id, status, errorMessage(error))
+  } catch (updateError: unknown) {
+    ctx.logger.warn(
+      `dh-delegation: could not persist status "${status}" for delegation "${id}": ${errorMessage(updateError)}`,
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,29 +537,100 @@ export function apply(ctx: Context): void {
         throw new Error('delegate: the subagents service is not composed; delegation is unavailable')
       }
       const projectId = parseProjectId(args.projectId ?? projectIdOf(exec))
-      // Mint a collision-free id rather than silently overwriting a record.
-      let id = readableDelegationId()
-      while (await recordExists(projectId, id)) {
-        id = readableDelegationId()
-      }
       const label = args.prompt.length > 80 ? `${args.prompt.slice(0, 80)}…` : args.prompt
       const startedAt = new Date().toISOString()
       const mode = args.mode ?? 'async'
-      const resultPath = resultFileFor(projectId, id)
       const promptBlocks: readonly ContentBlockLike[] = [{ type: 'text', text: args.prompt }]
 
-      let run: SubagentRun | undefined
-      let childId: SessionIdBrand
+      const makeDelegationRecord = (id: string, childId: SessionIdBrand): DelegationRecord => ({
+        id,
+        agent: args.agent,
+        prompt: args.prompt,
+        status: 'running',
+        startedAt,
+        updatedAt: startedAt,
+        resultPath: resultFileFor(projectId, id),
+        childId,
+      })
+
       if (isOneShot(args.agent)) {
-        run = await subagents.start(args.agent, {
+        const run = await subagents.start(args.agent, {
           label,
           prompt: promptBlocks,
           parent,
           agentOptions: parent.options,
           signal: exec.signal,
         })
-        childId = run.id
-      } else {
+        // Atomic id minting: the record file is created exclusively, so a
+        // concurrent delegate call can never silently overwrite this record.
+        const delegation = await mintDelegationRecord(projectId, (id) => makeDelegationRecord(id, run.id))
+        if (mode === 'sync') {
+          try {
+            const result = await run.result
+            const output = renderBlocks(result.output)
+            await updateRecordStatus(projectId, delegation.id, statusOf(result.stopReason), output)
+            return {
+              id: delegation.id,
+              agent: args.agent,
+              status: statusOf(result.stopReason),
+              resultPath: delegation.resultPath,
+              output,
+            }
+          } catch (error: unknown) {
+            await persistSyncFailure(ctx, projectId, delegation.id, exec.signal, error)
+            throw error
+          } finally {
+            try {
+              await run.dispose()
+            } catch (error: unknown) {
+              ctx.logger.warn(
+                `dh-delegation: could not dispose run for delegation "${delegation.id}": ${errorMessage(error)}`,
+              )
+            }
+          }
+        }
+        runFinalizer(ctx, `finalizing one-shot delegation "${delegation.id}"`, async () => {
+          let status = 'error'
+          let output = ''
+          try {
+            const result = await run.result
+            status = statusOf(result.stopReason)
+            output = renderBlocks(result.output)
+          } catch (error: unknown) {
+            output = errorMessage(error)
+          }
+          try {
+            await updateRecordStatus(projectId, delegation.id, status, output)
+          } catch (error: unknown) {
+            ctx.logger.warn(
+              `dh-delegation: could not persist status "${status}" for delegation "${delegation.id}": ${errorMessage(error)}`,
+            )
+          }
+          try {
+            await run.dispose()
+          } catch (error: unknown) {
+            ctx.logger.warn(
+              `dh-delegation: could not dispose run for delegation "${delegation.id}": ${errorMessage(error)}`,
+            )
+          }
+        })
+        return {
+          id: delegation.id,
+          agent: args.agent,
+          status: 'running',
+          resultPath: delegation.resultPath,
+          output: '',
+        }
+      }
+
+      // Continuable child (coder/scribe): `subagent/end` is the child's
+      // terminal epoch edge (natural settlement or teardown), so the record is
+      // finalized from it. The buffered watcher is attached BEFORE
+      // `startContinuable` so a first-turn settlement racing the record write
+      // is never lost.
+      const endWatcher = watchSubagentEnds(ctx)
+      let handedOff = false
+      try {
         const started = await subagents.startContinuable({
           provider: args.agent,
           label,
@@ -404,47 +641,57 @@ export function apply(ctx: Context): void {
           },
           signal: exec.signal,
         })
-        childId = started.childId
-      }
-      const record: DelegationRecord = {
-        id,
-        agent: args.agent,
-        prompt: args.prompt,
-        status: 'running',
-        startedAt,
-        updatedAt: startedAt,
-        resultPath,
-        childId,
-      }
-      await writeRecord(projectId, record, '')
-
-      if (run !== undefined) {
+        const delegation = await mintDelegationRecord(
+          projectId,
+          (id) => makeDelegationRecord(id, started.childId),
+        )
         if (mode === 'sync') {
-          const result = await run.result
-          const output = renderBlocks(result.output)
-          await updateRecordStatus(projectId, id, statusOf(result.stopReason), output)
-          await run.dispose()
-          return { id, agent: args.agent, status: statusOf(result.stopReason), resultPath, output }
+          try {
+            const info = await endWatcher.waitFor(started.childId, exec.signal)
+            const output = renderBlocks(info.lastAssistantMessage ?? [])
+            await updateRecordStatus(projectId, delegation.id, statusOf(info.stopReason), output)
+            return {
+              id: delegation.id,
+              agent: args.agent,
+              status: statusOf(info.stopReason),
+              resultPath: delegation.resultPath,
+              output,
+            }
+          } catch (error: unknown) {
+            await persistSyncFailure(ctx, projectId, delegation.id, exec.signal, error)
+            throw error
+          }
         }
-        void run.result.then(async (result) => {
-          await updateRecordStatus(projectId, id, statusOf(result.stopReason), renderBlocks(result.output))
-        }).catch(async (error: unknown) => {
-          await updateRecordStatus(projectId, id, 'error', errorMessage(error))
-        }).finally(async () => {
-          await run.dispose()
+        handedOff = true
+        runFinalizer(ctx, `finalizing continuable delegation "${delegation.id}"`, async () => {
+          try {
+            const info = await endWatcher.waitFor(started.childId)
+            await updateRecordStatus(
+              projectId,
+              delegation.id,
+              statusOf(info.stopReason),
+              renderBlocks(info.lastAssistantMessage ?? []),
+            )
+          } catch (error: unknown) {
+            ctx.logger.warn(
+              `dh-delegation: could not finalize continuable delegation "${delegation.id}": ${errorMessage(error)}`,
+            )
+          } finally {
+            endWatcher.dispose()
+          }
         })
-        return { id, agent: args.agent, status: 'running', resultPath, output: '' }
+        return {
+          id: delegation.id,
+          agent: args.agent,
+          status: 'running',
+          resultPath: delegation.resultPath,
+          output: '',
+        }
+      } finally {
+        // The sync path is done waiting (or never started); the async path
+        // handed the watcher to its background finalizer.
+        if (!handedOff) endWatcher.dispose()
       }
-
-      // Continuable child (coder/scribe): `subagent/end` is an epoch/turn
-      // signal, NOT settlement — the child may be continued. Keep the record
-      // running and let delegation_read's live-output branch be the truth.
-      if (mode === 'sync') {
-        const info = await awaitSubagentEnd(ctx, childId, exec.signal)
-        const output = renderBlocks(info.lastAssistantMessage ?? [])
-        return { id, agent: args.agent, status: 'running', resultPath, output }
-      }
-      return { id, agent: args.agent, status: 'running', resultPath, output: '' }
     },
   }))
 
@@ -568,4 +815,9 @@ export function apply(ctx: Context): void {
 /** Whether an fs error means the directory simply does not exist. */
 function isMissingDir(error: unknown): boolean {
   return error !== null && typeof error === 'object' && (error as { code?: string }).code === 'ENOENT'
+}
+
+/** Whether an fs error means an exclusive-create target already exists. */
+function isFileExists(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && (error as { code?: string }).code === 'EEXIST'
 }

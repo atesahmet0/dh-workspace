@@ -4,6 +4,10 @@
   "version": "0.1.6",
   "private": false,
   "type": "module",
+  "files": [
+    "presets/",
+    "cordis.patch.yml"
+  ],
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -11,7 +15,9 @@
   "scripts": {
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
-    "clean": "rm -rf packages/*/lib"
+    "clean": "rm -rf packages/*/lib",
+    "prepack": "pnpm run build",
+    "prepublishOnly": "node -e 'const ua = process.env.npm_config_user_agent || \"\"; if (ua.indexOf(\"pnpm\") !== 0) { console.error(\"@dh-multiagents/bundle: publish with pnpm only — plain npm publish ships workspace:* deps unresolved (broke 0.1.0). Run: pnpm publish\"); process.exit(1) }'"
   },
   "dependencies": {
     "@dh-multiagents/dh-common": "workspace:*",

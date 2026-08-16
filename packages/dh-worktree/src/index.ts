@@ -8,7 +8,7 @@
  * @module @dh-multiagents/dh-worktree
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -62,10 +62,67 @@ function worktreesDir(projectId: string): string {
   return join(projectDir(projectId), 'worktrees')
 }
 
+/**
+ * Names accepted by `git check-ref-format --branch`: no leading "-", ".", "@",
+ * or "/"; no "..", "@{", "//", spaces, control bytes, or any of ~ ^ : ? * [ \;
+ * no component ending in "." or ".lock"; at least one character.
+ */
+const BRANCH_NAME_PATTERN = /^(?![-.@\/])(?!.*\.\.)(?!.*@\{)(?!.*[\x00-\x20\x7f~^:?*[\\])(?!.*\/(?:\/|$))(?!.*\.lock(?:\/|$))(?!.*\.(?:\/|$))[a-zA-Z0-9._/-]+$/
+
+/** Throw unless `branch` is a name git would accept for a new branch. */
+function assertBranchName(branch: string): void {
+  if (!BRANCH_NAME_PATTERN.test(branch)) {
+    throw new Error(
+      `worktree_create: "${branch}" is not a valid git branch name. `
+      + 'It must not start with "-", ".", "@", or "/"; must not contain "..", '
+      + '"@{", "//", spaces, control bytes, or any of ~ ^ : ? * [ \\; and must not end with "." or "/".',
+    )
+  }
+}
+
+/** Throw unless `baseBranch` can safely be passed to git and resolves to a commit. */
+async function assertResolvableBaseBranch(
+  ctx: Context,
+  cwd: string,
+  baseBranch: string,
+  signal: AbortSignal,
+): Promise<void> {
+  if (baseBranch.startsWith('-')) {
+    throw new Error(
+      `worktree_create: baseBranch "${baseBranch}" looks like a git option; pass a branch or commit name instead`,
+    )
+  }
+  try {
+    await runGit(ctx, cwd, ['rev-parse', '--verify', `${baseBranch}^{commit}`], signal)
+  } catch {
+    throw new Error(
+      `worktree_create: baseBranch "${baseBranch}" does not resolve to a commit in this repository`,
+    )
+  }
+}
+
 /** Make a branch name safe to use as a single path component. */
 function pathSafe(value: string): string {
   const sanitized = value.replace(/[^a-zA-Z0-9._-]/g, '-')
-  return sanitized.length > 0 ? sanitized : 'worktree'
+  // "." and ".." would make the worktree path escape the worktrees directory.
+  return sanitized === '.' || sanitized === '..' || sanitized.length === 0 ? 'worktree' : sanitized
+}
+
+/**
+ * Best-effort removal of `directory` when it exists and is empty. Pre-existing
+ * non-empty directories (and plain files) are never touched.
+ */
+async function removeEmptyDirectory(directory: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(directory)
+  } catch {
+    // Missing, a file, or unreadable — nothing safe to remove.
+    return
+  }
+  if (entries.length === 0) {
+    await rm(directory, { recursive: false, force: true }).catch(() => {})
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,15 +231,31 @@ export function apply(ctx: Context): void {
       await runGit(ctx, cwd, ['rev-parse', '--is-inside-work-tree'], exec.signal)
 
       const branch = args.branch ?? `dsh/${randomBranchSuffix()}`
+      const baseBranch = args.baseBranch === '' ? undefined : args.baseBranch
+
+      // Parse model-provided names at the boundary so an injected value can
+      // never be interpreted as a git option or forwarded to git unverified.
+      assertBranchName(branch)
+      if (baseBranch !== undefined) {
+        await assertResolvableBaseBranch(ctx, cwd, baseBranch, exec.signal)
+      }
+
       const path = join(worktreesDir(projectId), pathSafe(branch))
       await mkdir(dirname(path), { recursive: true })
-      const argv = ['worktree', 'add', '-b', branch, path, ...(args.baseBranch !== undefined ? [args.baseBranch] : [])]
-      await runGit(ctx, cwd, argv, exec.signal)
+      const argv = ['worktree', 'add', '-b', branch, path, ...(baseBranch !== undefined ? [baseBranch] : [])]
+      try {
+        await runGit(ctx, cwd, argv, exec.signal)
+      } catch (error) {
+        // Do not leave an empty worktree directory behind when git rejects the
+        // branch or base ref. Pre-existing non-empty directories are preserved.
+        await removeEmptyDirectory(path)
+        throw error
+      }
 
       const entry: WorktreeEntry = {
         path,
         branch,
-        ...args.baseBranch !== undefined ? { baseBranch: args.baseBranch } : {},
+        ...baseBranch !== undefined ? { baseBranch } : {},
         createdAt: new Date().toISOString(),
       }
       const entries = await readWorktrees(projectId)

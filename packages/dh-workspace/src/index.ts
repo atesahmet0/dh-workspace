@@ -38,7 +38,9 @@ async function ensureProjectDir(projectId: string): Promise<string> {
 
 /** Whether the content opens with a top-level `# ` heading (an H1 line). */
 function hasTopLevelHeading(content: string): boolean {
-  return /^#(?:[^#]|$)/m.test(content)
+  const firstNonEmptyLine = content.split(/\r?\n/).find((line) => line.trim().length > 0)
+  if (firstNonEmptyLine === undefined) return false
+  return /^#(?: |$)/.test(firstNonEmptyLine.trim())
 }
 
 // ---------------------------------------------------------------------------
@@ -100,12 +102,23 @@ function rulesForAgent(assemble: { agent?: { ctx: Context } | undefined }, targe
 }
 
 // ---------------------------------------------------------------------------
-// Preset mirroring (boot-time replacement for the former postinstall script)
+// Bundle mirroring (boot-time replacement for the former postinstall script)
 // ---------------------------------------------------------------------------
 
+/** One boot-time mirror: a bundle directory copied into the user root. */
+interface BundleDirMirror {
+  /** Candidate source locations, resolved from THIS plugin's compiled file (never cwd). */
+  readonly candidates: readonly string[]
+  /** The user-root subdirectory mirrored into. */
+  readonly targetDirName: string
+  /** Human-readable label used in boot warnings. */
+  readonly label: string
+}
+
 /**
- * Candidate locations of the bundle's agent-presets directory, resolved from
- * THIS plugin's compiled file (never cwd). The first that exists wins.
+ * The bundle's agent-presets directory, mirrored to `$DSH_HOME/.agent-presets`
+ * (enabled via `includeUserRoot: true`) so the dsh CLI's own shipped root
+ * (which replaces `roots`, DESIGN.md §4) does not hide them.
  *
  * - Installed (hoisted, the dsh profile default): from
  *   `node_modules/@dh-multiagents/dh-workspace/lib/index.js`,
@@ -113,14 +126,40 @@ function rulesForAgent(assemble: { agent?: { ctx: Context } | undefined }, targe
  * - Source tree (dev): from `packages/dh-workspace/lib/index.js`,
  *   `../../../presets/` lands on the repo-root `presets/`.
  */
-const BUNDLE_PRESETS_CANDIDATES = [
-  '../../../@dh-multiagents/bundle/presets/',
-  '../../../presets/',
-] as const
+const BUNDLE_PRESETS_MIRROR: BundleDirMirror = {
+  candidates: [
+    '../../../@dh-multiagents/bundle/presets/',
+    '../../../presets/',
+  ],
+  targetDirName: '.agent-presets',
+  label: 'presets',
+}
 
-/** The first candidate presets directory that exists on disk, else undefined. */
-function resolveBundlePresets(): string | undefined {
-  for (const candidate of BUNDLE_PRESETS_CANDIDATES) {
+/**
+ * The dh-philosophy package's skills directory, mirrored to `$DSH_HOME/.skills`
+ * and surfaced through the skill-filesystem provider's `bundledSkillDir` (root
+ * `cordis.patch.yml`). Mirroring keeps the five philosophy skills loadable
+ * under a non-hoisted (pnpm-nested) install, where a `node_modules`-relative
+ * lookup silently resolves to nothing.
+ *
+ * - Installed (hoisted, the dsh profile default): from
+ *   `node_modules/@dh-multiagents/dh-workspace/lib/index.js`,
+ *   `../../../@dh-multiagents/dh-philosophy/skills/` lands on the package.
+ * - Source tree (dev): from `packages/dh-workspace/lib/index.js`,
+ *   `../../../packages/dh-philosophy/skills/` lands on the monorepo package.
+ */
+const BUNDLE_SKILLS_MIRROR: BundleDirMirror = {
+  candidates: [
+    '../../../@dh-multiagents/dh-philosophy/skills/',
+    '../../../packages/dh-philosophy/skills/',
+  ],
+  targetDirName: '.skills',
+  label: 'skills',
+}
+
+/** The first candidate source directory that exists on disk, else undefined. */
+function resolveBundleDir(candidates: readonly string[]): string | undefined {
+  for (const candidate of candidates) {
     const path = fileURLToPath(new URL(candidate, import.meta.url))
     if (existsSync(path)) return path
   }
@@ -128,31 +167,39 @@ function resolveBundlePresets(): string | undefined {
 }
 
 /**
- * Mirror the bundle's agent-presets into the user root
- * (`$DSH_HOME/.agent-presets`, enabled via `includeUserRoot: true`) so the dsh
- * CLI's own shipped root (which replaces `roots`, DESIGN.md §4) does not hide
- * them. Runs synchronously at boot, before any preset composition reads the
- * user root. Idempotent (recursive copy, overwrite ok, dotfiles skipped) and
- * fail-soft: the plugin always boots even when there is nothing to mirror.
+ * Mirror one bundle directory into the user root (`$DSH_HOME/<targetDirName>`).
+ * Runs synchronously at boot, before any consumer reads the user root.
+ * Idempotent (recursive copy, overwrite ok, dotfiles skipped) and fail-soft:
+ * the plugin always boots even when there is nothing to mirror.
  */
-function mirrorPresetsAtBoot(ctx: Context): void {
+function mirrorBundleDirAtBoot(ctx: Context, mirror: BundleDirMirror): void {
   try {
     const dshHomePath = ctx.get('dshHomePath') as ((p?: string) => string | undefined) | undefined
     const home = dshHomePath?.() ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
-    const sourceDir = resolveBundlePresets()
+    const sourceDir = resolveBundleDir(mirror.candidates)
     if (sourceDir === undefined) {
-      ctx.logger.warn('dh-workspace: bundle presets directory not found; skipping preset mirror')
+      ctx.logger.warn(`dh-workspace: bundle ${mirror.label} directory not found; skipping ${mirror.label} mirror`)
       return
     }
-    const targetDir = join(home, '.agent-presets')
+    const targetDir = join(home, mirror.targetDirName)
     mkdirSync(targetDir, { recursive: true })
     for (const entry of readdirSync(sourceDir)) {
       if (entry.startsWith('.')) continue
       cpSync(join(sourceDir, entry), join(targetDir, entry), { recursive: true })
     }
   } catch (error: unknown) {
-    ctx.logger.warn(`dh-workspace: preset mirror failed (${errorMessage(error)}); continuing without mirrored presets`)
+    ctx.logger.warn(`dh-workspace: ${mirror.label} mirror failed (${errorMessage(error)}); continuing without mirrored ${mirror.label}`)
   }
+}
+
+/** Mirror the bundle's agent-presets into the user root (see {@link BUNDLE_PRESETS_MIRROR}). */
+function mirrorPresetsAtBoot(ctx: Context): void {
+  mirrorBundleDirAtBoot(ctx, BUNDLE_PRESETS_MIRROR)
+}
+
+/** Mirror the dh-philosophy package's skills into the user root (see {@link BUNDLE_SKILLS_MIRROR}). */
+function mirrorSkillsAtBoot(ctx: Context): void {
+  mirrorBundleDirAtBoot(ctx, BUNDLE_SKILLS_MIRROR)
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +208,7 @@ function mirrorPresetsAtBoot(ctx: Context): void {
 
 export function apply(ctx: Context): void {
   mirrorPresetsAtBoot(ctx)
+  mirrorSkillsAtBoot(ctx)
 
   ctx.tools.register(defineTool({
     name: 'plan_save',
