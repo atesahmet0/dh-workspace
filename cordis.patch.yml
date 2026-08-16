@@ -82,11 +82,13 @@
       name: '@dh-multiagents/dh-worktree'
       # registers tools: worktree_create, worktree_delete
 
-# ── skills ───────────────────────────────────────────────────────────────────
-
-# @dh-multiagents/dh-philosophy is a SKILL.md package, NOT a plugin: it has no
-# cordis row. Its five SKILL.md directories are surfaced through the
-# skill-filesystem provider. The profile layer (profile/cordis.patch.yml)
-# overrides the skill-filesystem row with bundledSkillDir/customSkillDirs
-# pointing at the installed dh-philosophy package, because that path is
-# deployment-specific and belongs to the user layer.
+# Skills: dh-philosophy is a content package (NOT a plugin); its five
+# SKILL.md files are surfaced through the skill-filesystem provider. The base
+# row (dsh-base) carries no config; this override points bundledSkillDir at
+# the installed dh-philosophy package. baseUrl is the profile directory, so
+# the path resolves under the profile's node_modules — deployment-independent,
+# which is why it lives in the bundle layer, not the profile layer.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    bundledSkillDir: !!js 'new URL("node_modules/@dh-multiagents/dh-philosophy/skills", baseUrl).pathname'

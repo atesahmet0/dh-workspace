@@ -9,18 +9,11 @@
 # with globals: process, injected ctx.<service>, dshHomePath(...), baseUrl
 # (baseUrl = the profile directory).
 
-# ── skills: surface the dh-philosophy SKILL.md packages ──────────────────────
-
-# @dh-multiagents/dh-philosophy is NOT a plugin (no cordis row); its five
-# skills (code-philosophy, frontend-philosophy, code-review, plan-review,
-# plan-protocol) are discovered through the skill-filesystem provider. The
-# base row (dsh-base) carries no config; this override adds the bundled skill
-# root pointing at the installed dh-philosophy package. baseUrl is the profile
-# directory, so the path resolves under the profile's node_modules.
-- id: skill-filesystem
-  name: '@deepseek-ai/dsh-skill-filesystem'
-  config:
-    bundledSkillDir: !!js 'new URL("node_modules/@dh-multiagents/dh-philosophy/skills", baseUrl).pathname'
+# ── skills: owned by the bundle layer ─────────────────────────────────────────
+#
+# The @dh-multiagents/bundle patch (cordis.patch.yml) now overrides the
+# skill-filesystem row (bundledSkillDir → the installed dh-philosophy package),
+# so this profile layer no longer needs to wire skills.
 
 # ── user-plane override examples (commented, for the deployment owner) ───────
 #

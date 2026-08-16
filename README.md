@@ -59,6 +59,9 @@ not merely documented.
 - **pnpm** `11.7.0` (`packageManager` field; corepack or `npm i -g pnpm@11.7.0`)
 - A **DeepSeek Harness** install (`@deepseek-ai/dsh` on npm, `0.1.0-rc.6` line)
 - A **DeepSeek API key** (`DEEPSEEK_API_KEY` env var for the `llm-deepseek` row)
+- **Install-script approval**: npm/pnpm 11 may prompt you to approve the
+  bundle's `postinstall` script on install; approve it (it only mirrors presets
+  under `$DSH_HOME`).
 
 Dependency line (pinned — see `DESIGN.md` §8): `@deepseek-ai/cordis ^4.0.1`,
 `@deepseek-ai/dsh-tools ^0.1.0-rc.6`, `@deepseek-ai/schemastery ^3.18.1`.
@@ -101,24 +104,20 @@ Per-package scripts: `pnpm -r typecheck`, `pnpm clean` (removes `lib/`).
    > The `@dh-multiagents/*` packages are workspace-linked during development;
    > for a deployed profile, pack them (`pnpm pack`) and install the tarballs.
 
-2. **Surface the philosophy skills** — the profile's `cordis.patch.yml`
-   overrides the `skill-filesystem` row so the five `SKILL.md` packages are
-   discovered:
-
-   ```yaml
-   - id: skill-filesystem
-     name: '@deepseek-ai/dsh-skill-filesystem'
-     config:
-       bundledSkillDir: !!js 'new URL("node_modules/@dh-multiagents/dh-philosophy/skills", baseUrl).pathname'
-   ```
+2. **Surface the philosophy skills** — nothing to do: the bundle wires the
+   `skill-filesystem` row itself (its `cordis.patch.yml` overrides
+   `bundledSkillDir` to point at the installed `dh-philosophy` package), so no
+   profile patch is needed.
 
 3. **Mirror the presets into the user preset root** (required — the dsh CLI
    appends its own shipped preset root as the *last* overlay, which replaces
-   the bundle's `roots`; see `DESIGN.md` §4):
+   the bundle's `roots`; see `DESIGN.md` §4): the bundle's `postinstall` script
+   mirrors `presets/` into `$DSH_HOME/.agent-presets/` automatically on install
+   (`dsh plugin add` / `npm install`). If you install with scripts skipped,
+   run the mirror by hand:
 
    ```bash
-   mkdir -p "$DSH_HOME/.agent-presets"   # DSH_HOME defaults to ~/.dsh
-   cp -r presets/* "$DSH_HOME/.agent-presets/"
+   node node_modules/@dh-multiagents/bundle/scripts/mirror-presets.mjs
    ```
 
    The `agent-presets` row must keep `includeUserRoot: true` (the bundle patch
