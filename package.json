@@ -1,7 +1,7 @@
 {
   "name": "@dh-multiagents/bundle",
   "description": "Out-of-tree dsh plugin bundle: philosophy skills plus workspace, delegation, subagent-preset, and worktree plugins (naming contract in DESIGN.md)",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": false,
   "type": "module",
   "files": [
@@ -17,7 +17,7 @@
     "typecheck": "pnpm -r run typecheck",
     "clean": "rm -rf packages/*/lib",
     "prepack": "pnpm run build",
-    "prepublishOnly": "node -e 'const ua = process.env.npm_config_user_agent || \"\"; if (ua.indexOf(\"pnpm\") !== 0) { console.error(\"@dh-multiagents/bundle: publish with pnpm only — plain npm publish ships workspace:* deps unresolved (broke 0.1.0). Run: pnpm publish\"); process.exit(1) }'"
+    "prepublishOnly": "node -e 'const ua = process.env.npm_config_user_agent || \"\"; if (ua.indexOf(\"pnpm\") !== 0) { console.error(\"@dh-multiagents/bundle: publish with pnpm only \u2014 plain npm publish ships workspace:* deps unresolved (broke 0.1.0). Run: pnpm publish\"); process.exit(1) }'"
   },
   "dependencies": {
     "@dh-multiagents/dh-common": "workspace:*",
