@@ -77,13 +77,35 @@ export function projectDir(projectId: string): string {
 }
 
 /**
+ * Canonicalize `path` even when it (or any ancestor) does not exist yet: walk
+ * up to the deepest existing ancestor, realpath it, and re-append the missing
+ * tail lexically. A not-yet-existing leaf cannot be a link, so its real path
+ * is its lexical path under the real ancestor.
+ */
+function realpathLoose(path: string): string {
+  const missing: string[] = []
+  let candidate = path
+  for (;;) {
+    try {
+      const real = realpathSync(candidate)
+      return missing.length === 0 ? real : join(real, ...missing.reverse())
+    } catch {
+      const parent = dirname(candidate)
+      if (parent === candidate) return resolve(path)
+      missing.push(basename(candidate))
+      candidate = parent
+    }
+  }
+}
+
+/**
  * Resolve `target` against `baseDir` and reject any result that escapes it.
  * Absolute targets inside `baseDir` are allowed; absolute or relative targets
  * that resolve outside are rejected. The result is realpath-canonicalized so a
  * planted symlink inside the workspace cannot redirect the read outside.
  */
 export function confinePath(baseDir: string, target: string): string {
-  const realBase = realpathSync(baseDir)
+  const realBase = realpathLoose(baseDir)
   const resolved = resolve(realBase, target)
   if (!isWithin(realBase, resolved)) {
     throw new Error(`path ${JSON.stringify(target)} escapes ${baseDir}`)
@@ -97,12 +119,7 @@ export function confinePath(baseDir: string, target: string): string {
  * base: it cannot be a link, and its deepest existing ancestor is real already.
  */
 function realpathWithin(base: string, candidate: string, label: string): string {
-  let real: string
-  try {
-    real = realpathSync(candidate)
-  } catch {
-    real = join(realpathSync(dirname(candidate)), basename(candidate))
-  }
+  const real = realpathLoose(candidate)
   if (!isWithin(base, real)) {
     throw new Error(`${label} escapes ${base} through a symlink`)
   }
@@ -198,6 +215,18 @@ export interface ToolRegistryLike {
   restrict(filter: ToolRestrictionLike): () => void
 }
 
+/**
+ * The dsh-tools registry scope-view surface read by `restrictPresetTools`.
+ * `ToolRuntime.view` is declared `private` in dsh-tools (a compile-time-only
+ * modifier), so `ToolRegistryLike` cannot name it without breaking the real
+ * `ToolRuntime`'s structural assignability; it is read here through a narrow
+ * cast. `view(undefined)` yields the GLOBAL toolset's `restrictableNames` (the
+ * set of names `restrict()` accepts).
+ */
+interface ToolScopeViewLike {
+  view?(scope: unknown): { readonly restrictableNames: ReadonlySet<string> } | undefined
+}
+
 /** A context that carries a scoped tools registry (an agent's `agent.ctx`). */
 export interface ScopedAgentCtxLike {
   readonly tools: ToolRegistryLike
@@ -206,22 +235,16 @@ export interface ScopedAgentCtxLike {
 }
 
 /**
- * Enforce one preset's capability matrix on an agent scope: keep exactly the
- * preset's ALLOW-list of global tools and hide every other global tool.
+ * Applies the capability-matrix restriction for a known preset to `agentCtx.tools`.
  *
- * A preset outside `CAPABILITY_MATRIX` passes through UNRESTRICTED: a foreign
- * preset (harness-shipped names like `standard`, `code`, `minimal`, `cordis`,
- * or anything dh-multiagents does not own) is governed by its owning
- * deployment, not by this bundle, so it is logged as a warning and left with
- * its full toolset instead of being rejected. Only a preset WE define with an
- * empty allow-list fails loud (an empty filter would hide every tool, which is
- * almost always a configuration bug). Returns the restriction disposer for
- * symmetric teardown; a foreign preset yields a no-op disposer.
- *
- * @param agentCtx - the agent's scoped context (`agent.ctx`); must be scoped,
- *   because a context-global restriction would mask every agent.
- * @param presetName - one of the `CAPABILITY_MATRIX` keys, or a foreign preset
- *   name that passes through unrestricted.
+ * The matrix allow-list is filtered against the tools this deployment exposes as
+ * GLOBAL (and therefore restrictable). Names that exist only in the agent's own
+ * scope layer (per-agent registrations) are not restrictable — `tools.restrict()`
+ * would throw on them — so they are skipped with a warning instead of aborting
+ * child creation. Foreign presets pass through unrestricted. A matrix entry with
+ * an empty allow-list is a configuration bug and still throws. A preset whose
+ * allow-list is entirely non-restrictable degrades to a warning and no restriction
+ * (hiding every tool would be worse than leaving the toolset unrestricted).
  */
 export function restrictPresetTools(agentCtx: ScopedAgentCtxLike, presetName: string): () => void {
   const allow = CAPABILITY_MATRIX[presetName]
@@ -238,7 +261,31 @@ export function restrictPresetTools(agentCtx: ScopedAgentCtxLike, presetName: st
       + 'refusing to hide every global tool (capability matrix is misconfigured)',
     )
   }
-  return agentCtx.tools.restrict({ allow })
+  const restrictable = (agentCtx.tools as unknown as ToolScopeViewLike).view?.(undefined)?.restrictableNames
+  if (restrictable === undefined) {
+    // Older harness without a scope view: preserve prior behavior, but never crash child creation.
+    try {
+      return agentCtx.tools.restrict({ allow })
+    } catch (error) {
+      agentCtx.logger?.warn(`dh-common: preset ${presetName} restriction failed (${errorMessage(error)}); leaving its toolset unrestricted`)
+      return () => {}
+    }
+  }
+  const enforced = allow.filter((name) => restrictable.has(name))
+  const skipped = allow.filter((name) => !restrictable.has(name))
+  if (skipped.length > 0) {
+    agentCtx.logger?.warn(`dh-common: preset ${presetName} skipped ${skipped.length} tool(s) that are not restrictable in this deployment (agent-local, not global): ${skipped.join(', ')}; the rest of the matrix is still enforced`)
+  }
+  if (enforced.length === 0) {
+    agentCtx.logger?.warn(`dh-common: preset ${presetName} has no restrictable tools in this deployment; leaving its toolset unrestricted rather than hiding every tool`)
+    return () => {}
+  }
+  try {
+    return agentCtx.tools.restrict({ allow: enforced })
+  } catch (error) {
+    agentCtx.logger?.warn(`dh-common: preset ${presetName} restriction failed (${errorMessage(error)}); leaving its toolset unrestricted`)
+    return () => {}
+  }
 }
 
 // ---------------------------------------------------------------------------
