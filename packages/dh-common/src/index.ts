@@ -201,27 +201,36 @@ export interface ToolRegistryLike {
 /** A context that carries a scoped tools registry (an agent's `agent.ctx`). */
 export interface ScopedAgentCtxLike {
   readonly tools: ToolRegistryLike
+  /** Optional scoped logger (`ctx.logger`), used to warn on foreign presets. */
+  readonly logger?: { warn(message: string): void }
 }
 
 /**
  * Enforce one preset's capability matrix on an agent scope: keep exactly the
  * preset's ALLOW-list of global tools and hide every other global tool.
  *
- * Fails loud on an unknown preset and on an empty allow-list (an empty filter
- * would hide every tool, which is almost always a configuration bug). Returns
- * the restriction disposer for symmetric teardown.
+ * A preset outside `CAPABILITY_MATRIX` passes through UNRESTRICTED: a foreign
+ * preset (harness-shipped names like `standard`, `code`, `minimal`, `cordis`,
+ * or anything dh-multiagents does not own) is governed by its owning
+ * deployment, not by this bundle, so it is logged as a warning and left with
+ * its full toolset instead of being rejected. Only a preset WE define with an
+ * empty allow-list fails loud (an empty filter would hide every tool, which is
+ * almost always a configuration bug). Returns the restriction disposer for
+ * symmetric teardown; a foreign preset yields a no-op disposer.
  *
  * @param agentCtx - the agent's scoped context (`agent.ctx`); must be scoped,
  *   because a context-global restriction would mask every agent.
- * @param presetName - one of the `CAPABILITY_MATRIX` keys.
+ * @param presetName - one of the `CAPABILITY_MATRIX` keys, or a foreign preset
+ *   name that passes through unrestricted.
  */
 export function restrictPresetTools(agentCtx: ScopedAgentCtxLike, presetName: string): () => void {
   const allow = CAPABILITY_MATRIX[presetName]
   if (allow === undefined) {
-    throw new Error(
-      `dh-common: unknown preset ${JSON.stringify(presetName)} in the capability matrix; `
-      + `known presets: ${Object.keys(CAPABILITY_MATRIX).join(', ')}`,
+    agentCtx.logger?.warn(
+      `dh-common: preset ${JSON.stringify(presetName)} is outside the capability matrix; `
+      + 'leaving its toolset unrestricted (foreign presets are governed by their owning deployment)',
     )
+    return () => {}
   }
   if (allow.length === 0) {
     throw new Error(
