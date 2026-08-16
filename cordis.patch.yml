@@ -45,42 +45,38 @@
   config:
     root: !!js dshHomePath('sessions')
 
-# ── agent presets: roster + discovery roots ──────────────────────────────────
+# ── agent presets: provided by the SURFACE bundles ─────────────────────────
 
-# The dsh-agent-presets service (not provided by dsh-base). default: plan.
-# roots: the presetRoot mechanism (AgentPresets.Config.roots, first-root-wins
-# per id); the path resolves to this bundle's presets/ dir under the profile's
-# node_modules (baseUrl = profile dir). NOTE: the reference dsh CLI appends
-# its own shipped preset root as the LAST overlay, replacing `roots`; if that
-# overlay interferes, mirror `presets/` into $DSH_HOME/.agent-presets/ (the
-# reference user root, enabled by includeUserRoot).
-- insert:
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
-      config:
-        default: plan
-        roots:
-          - path: !!js 'new URL("node_modules/@dh-multiagents/bundle/presets/", baseUrl).pathname'
-            trust: system
-        includeUserRoot: true
+# The dsh-agent-presets service is NOT inserted here. The surface bundles own
+# it: the dsh web app inserts its own `agent-presets` row, and the CLI appends
+# its shipped preset root as the last overlay. We deliberately do NOT insert
+# our own `agent-presets` row: a second bare insert collides with the web
+# app's ("duplicate loader entry id"). Our presets are instead discovered
+# through the USER root ($DSH_HOME/.agent-presets/), which includeUserRoot
+# enables by default (dsh-agent-presets Config default true). dh-workspace's
+# apply() mirrors the bundle's presets there at every boot
+# (mirrorPresetsAtBoot, DESIGN.md §4). To change the default preset, set it in
+# profile/settings.yaml:
+#   agent-presets:
+#     default: plan
 
-    # ── dh-multiagents plugins (row ids/names per DESIGN.md §2) ──────────────
+# ── dh-multiagents plugins (row ids/names per DESIGN.md §2) ──────────────
 
-    - id: dh-workspace
-      name: '@dh-multiagents/dh-workspace'
-      # registers tools: plan_save, plan_read (+ systemPrompt.context sections)
+- id: dh-workspace
+  name: '@dh-multiagents/dh-workspace'
+  # registers tools: plan_save, plan_read (+ systemPrompt.context sections)
 
-    - id: dh-delegation
-      name: '@dh-multiagents/dh-delegation'
-      # registers tools: delegate, delegation_read, delegation_list
+- id: dh-delegation
+  name: '@dh-multiagents/dh-delegation'
+  # registers tools: delegate, delegation_read, delegation_list
 
-    - id: dh-subagent-preset
-      name: '@dh-multiagents/dh-subagent-preset'
-      # registers SubagentProvider names: explore, researcher, coder, scribe, reviewer
+- id: dh-subagent-preset
+  name: '@dh-multiagents/dh-subagent-preset'
+  # registers SubagentProvider names: explore, researcher, coder, scribe, reviewer
 
-    - id: dh-worktree
-      name: '@dh-multiagents/dh-worktree'
-      # registers tools: worktree_create, worktree_delete
+- id: dh-worktree
+  name: '@dh-multiagents/dh-worktree'
+  # registers tools: worktree_create, worktree_delete
 
 # Skills: dh-philosophy is a content package (NOT a plugin); its five
 # SKILL.md files are surfaced through the skill-filesystem provider. The base
