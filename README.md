@@ -4,10 +4,10 @@ Multi-agent orchestration for the DeepSeek Harness (dsh). A team of role-bound a
 
 ## Why dh-multiagents?
 
-- 🧭 **Plan-first** — read-only orchestrators delegate, never write code themselves.
-- 🔒 **Enforced, not suggested** — each preset's tool allow-list is applied via `tools.restrict`, so a plan agent physically can't run bash.
-- 🧩 **Auditable delegation** — every `delegate` call persists an id (e.g. `daring-pearl-elk`) with a result file on disk.
-- 📦 **Zero-config install** — one command, presets + skills wired automatically.
+- **Plan-first** — read-only orchestrators delegate, never write code themselves.
+- **Enforced, not suggested** — each preset's tool allow-list is applied via `tools.restrict`, so a plan agent physically can't run bash.
+- **Auditable delegation** — every `delegate` call persists an id (e.g. `daring-pearl-elk`) with a result file on disk.
+- **Zero-config install** — one command, presets + skills wired automatically.
 
 ## Installation
 
