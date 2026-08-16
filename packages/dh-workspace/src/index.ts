@@ -9,8 +9,11 @@
  * @module @dh-multiagents/dh-workspace
  */
 
+import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { confinePath, errorMessage, parseProjectId, projectDir, projectIdOf } from '@dh-multiagents/dh-common'
@@ -97,10 +100,68 @@ function rulesForAgent(assemble: { agent?: { ctx: Context } | undefined }, targe
 }
 
 // ---------------------------------------------------------------------------
+// Preset mirroring (boot-time replacement for the former postinstall script)
+// ---------------------------------------------------------------------------
+
+/**
+ * Candidate locations of the bundle's agent-presets directory, resolved from
+ * THIS plugin's compiled file (never cwd). The first that exists wins.
+ *
+ * - Installed (hoisted, the dsh profile default): from
+ *   `node_modules/@dh-multiagents/dh-workspace/lib/index.js`,
+ *   `../../../@dh-multiagents/bundle/presets/` lands on the bundle's presets.
+ * - Source tree (dev): from `packages/dh-workspace/lib/index.js`,
+ *   `../../../presets/` lands on the repo-root `presets/`.
+ */
+const BUNDLE_PRESETS_CANDIDATES = [
+  '../../../@dh-multiagents/bundle/presets/',
+  '../../../presets/',
+] as const
+
+/** The first candidate presets directory that exists on disk, else undefined. */
+function resolveBundlePresets(): string | undefined {
+  for (const candidate of BUNDLE_PRESETS_CANDIDATES) {
+    const path = fileURLToPath(new URL(candidate, import.meta.url))
+    if (existsSync(path)) return path
+  }
+  return undefined
+}
+
+/**
+ * Mirror the bundle's agent-presets into the user root
+ * (`$DSH_HOME/.agent-presets`, enabled via `includeUserRoot: true`) so the dsh
+ * CLI's own shipped root (which replaces `roots`, DESIGN.md §4) does not hide
+ * them. Runs synchronously at boot, before any preset composition reads the
+ * user root. Idempotent (recursive copy, overwrite ok, dotfiles skipped) and
+ * fail-soft: the plugin always boots even when there is nothing to mirror.
+ */
+function mirrorPresetsAtBoot(ctx: Context): void {
+  try {
+    const dshHomePath = ctx.get('dshHomePath') as ((p?: string) => string | undefined) | undefined
+    const home = dshHomePath?.() ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
+    const sourceDir = resolveBundlePresets()
+    if (sourceDir === undefined) {
+      ctx.logger.warn('dh-workspace: bundle presets directory not found; skipping preset mirror')
+      return
+    }
+    const targetDir = join(home, '.agent-presets')
+    mkdirSync(targetDir, { recursive: true })
+    for (const entry of readdirSync(sourceDir)) {
+      if (entry.startsWith('.')) continue
+      cpSync(join(sourceDir, entry), join(targetDir, entry), { recursive: true })
+    }
+  } catch (error: unknown) {
+    ctx.logger.warn(`dh-workspace: preset mirror failed (${errorMessage(error)}); continuing without mirrored presets`)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin entry
 // ---------------------------------------------------------------------------
 
 export function apply(ctx: Context): void {
+  mirrorPresetsAtBoot(ctx)
+
   ctx.tools.register(defineTool({
     name: 'plan_save',
     description: 'Persist a markdown implementation plan under $DSH_HOME/workspace/<projectId>/plan.md. '
