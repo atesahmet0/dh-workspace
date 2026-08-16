@@ -18,12 +18,8 @@ dsh plugin --profile <name> init
 dsh plugin --profile <name> add @dh-multiagents/bundle
 ```
 
-> **pnpm 11:** approve the bundle's postinstall (mirrors presets) by adding to the profile's `pnpm-workspace.yaml`:
-> ```yaml
-> allowBuilds:
->   "@dh-multiagents/bundle": true
-> ```
-> then `pnpm install` once. Without it, packages install but presets aren't mirrored.
+> Presets are mirrored automatically at every boot (the plugin copies them
+> into `$DSH_HOME/.agent-presets/`), so there is no install-time step.
 
 > **Fresh dsh CLI (npm 11):** npm 11 blocks dependency install scripts by
 > default — the harness's own native deps (`node-pty`, `dsh-subprocess-local`,
