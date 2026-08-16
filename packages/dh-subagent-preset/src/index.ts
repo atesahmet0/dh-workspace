@@ -327,7 +327,7 @@ class PresetSubagentProvider implements SubagentProvider {
     const handle = await parent.ctx.agents.create({
       sessionId: childId,
       meta: childSessionMeta(parent, this.presetId, childDepth),
-      ...request.agentOptions !== undefined ? { agentOptions: request.agentOptions } : {},
+      agentOptions: request.agentOptions ?? parent.options,
       signal: request.signal,
       setup: async (childCtx: Context): Promise<void> => {
         await composeNamedPreset(childCtx, this.presetId)
