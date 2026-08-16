@@ -389,6 +389,7 @@ export function apply(ctx: Context): void {
           label,
           prompt: promptBlocks,
           parent,
+          agentOptions: parent.options,
           signal: exec.signal,
         })
         childId = run.id
