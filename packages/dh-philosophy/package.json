@@ -12,12 +12,18 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["lib", "skills"],
+  "files": [
+    "lib",
+    "skills"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
