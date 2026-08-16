@@ -59,9 +59,10 @@ not merely documented.
 - **pnpm** `11.7.0` (`packageManager` field; corepack or `npm i -g pnpm@11.7.0`)
 - A **DeepSeek Harness** install (`@deepseek-ai/dsh` on npm, `0.1.0-rc.6` line)
 - A **DeepSeek API key** (`DEEPSEEK_API_KEY` env var for the `llm-deepseek` row)
-- **Install-script approval**: npm/pnpm 11 may prompt you to approve the
-  bundle's `postinstall` script on install; approve it (it only mirrors presets
-  under `$DSH_HOME`).
+- **pnpm 11 build-script gate**: pnpm 11 blocks dependency postinstall
+  scripts by default — approve the bundle's preset-mirror script via
+  `allowBuilds` in the profile's `pnpm-workspace.yaml` (see
+  [Deploying](#deploying-into-a-dsh-profile)).
 
 Dependency line (pinned — see `DESIGN.md` §8): `@deepseek-ai/cordis ^4.0.1`,
 `@deepseek-ai/dsh-tools ^0.1.0-rc.6`, `@deepseek-ai/schemastery ^3.18.1`.
@@ -84,51 +85,81 @@ Per-package scripts: `pnpm -r typecheck`, `pnpm clean` (removes `lib/`).
 
 ## Deploying into a dsh profile
 
-1. **Create a profile** that mounts the bundle (see `profile/package.json` in
-   this repo for the manifest shape):
+The bundle is published to npm (`@dh-multiagents/bundle` + 6 sub-packages), so
+a deployed profile is just the registry package plus the built-in postinstall.
 
-   ```json
-   {
-     "dependencies": {
-       "@deepseek-ai/dsh-base": "0.1.0-rc.6",
-       "@dh-multiagents/bundle": "<path or registry ref>"
-     },
-     "dsh": {
-       "profile": {
-         "bundles": ["@deepseek-ai/dsh-base", "@dh-multiagents/bundle"]
-       }
-     }
-   }
-   ```
+### Quick start (registry install)
 
-   > The `@dh-multiagents/*` packages are workspace-linked during development;
-   > for a deployed profile, pack them (`pnpm pack`) and install the tarballs.
+```bash
+# 1. Create the profile (dsh CLI creates it under $DSH_HOME/profiles/<name>)
+dsh plugin --profile <name> init
 
-2. **Surface the philosophy skills** — nothing to do: the bundle wires the
-   `skill-filesystem` row itself (its `cordis.patch.yml` overrides
-   `bundledSkillDir` to point at the installed `dh-philosophy` package), so no
-   profile patch is needed.
+# 2. Add the bundle — installs @dh-multiagents/bundle and its deps, then the
+#    postinstall mirrors presets/ into $DSH_HOME/.agent-presets/ automatically
+dsh plugin --profile <name> add @dh-multiagents/bundle
 
-3. **Mirror the presets into the user preset root** (required — the dsh CLI
-   appends its own shipped preset root as the *last* overlay, which replaces
-   the bundle's `roots`; see `DESIGN.md` §4): the bundle's `postinstall` script
-   mirrors `presets/` into `$DSH_HOME/.agent-presets/` automatically on install
-   (`dsh plugin add` / `npm install`). If you install with scripts skipped,
-   run the mirror by hand:
+# 3. Boot
+DEEPSEEK_API_KEY=... dsh --profile <name> headless "your task"
+```
+
+**pnpm 11 build-script gate (required once):** pnpm 11 blocks dependency
+postinstall scripts by default. Approve the bundle's mirror script by adding
+this to the profile's `pnpm-workspace.yaml` (note the **quoted key**):
+
+```yaml
+allowBuilds:
+  "@dh-multiagents/bundle": true
+```
+
+then re-run `pnpm install` (or `pnpm rebuild @dh-multiagents/bundle`) once so
+the mirror runs. Without this, packages install fine but presets are not
+auto-mirrored — see the manual fallback below.
+
+### What the install does (and why nothing else is needed)
+
+1. **Plugins** — the bundle's `cordis.patch.yml` inserts the four plugin rows
+   (`dh-workspace`, `dh-delegation`, `dh-subagent-preset`, `dh-worktree`) on
+   top of `dsh-base`.
+2. **Skills** — nothing to do: the bundle wires the `skill-filesystem` row
+   itself (its `cordis.patch.yml` overrides `bundledSkillDir` to point at the
+   installed `dh-philosophy` package), so no profile patch is needed.
+3. **Presets** — required because the dsh CLI appends its own shipped preset
+   root as the *last* overlay, which replaces the bundle's `roots` (see
+   `DESIGN.md` §4). The bundle's `postinstall` script mirrors `presets/` into
+   `$DSH_HOME/.agent-presets/` automatically on install (the `agent-presets`
+   row keeps `includeUserRoot: true` so they are discovered alongside the
+   CLI's own).
+
+   Manual fallback (if you install with scripts skipped):
 
    ```bash
+   mkdir -p "$DSH_HOME/.agent-presets"
    node node_modules/@dh-multiagents/bundle/scripts/mirror-presets.mjs
    ```
 
-   The `agent-presets` row must keep `includeUserRoot: true` (the bundle patch
-   sets it) so the mirrored presets are discovered alongside the CLI's own.
+### Boot & verify
 
-4. **Boot**:
+```bash
+dsh --profile <your-profile> --dump-config   # verify the composition
+DEEPSEEK_API_KEY=... dsh --profile <your-profile> headless "your task"
+```
 
-   ```bash
-   dsh --profile <your-profile> --dump-config   # verify the composition
-   DEEPSEEK_API_KEY=... dsh --profile <your-profile> headless "your task"
-   ```
+### Installing from source (development)
+
+The `@dh-multiagents/*` packages are workspace-linked during development.
+Build and pack them, then point the profile at the tarballs:
+
+```bash
+pnpm install && pnpm -r build
+for p in dh-common dh-delegation dh-philosophy dh-subagent-preset dh-workspace dh-worktree; do
+  (cd packages/$p && pnpm pack --pack-destination /tmp/tarballs)
+done
+pnpm pack --pack-destination /tmp/tarballs   # root = @dh-multiagents/bundle
+```
+
+> ⚠️ **Publish note:** always publish via `pnpm pack` tarballs, never
+> `npm publish` from the source dir — npm does not rewrite the `workspace:*`
+> protocol, which breaks installs (0.1.0 shipped broken this way).
 
 ---
 
