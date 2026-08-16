@@ -62,21 +62,22 @@
 
 # ── dh-multiagents plugins (row ids/names per DESIGN.md §2) ──────────────
 
-- id: dh-workspace
-  name: '@dh-multiagents/dh-workspace'
-  # registers tools: plan_save, plan_read (+ systemPrompt.context sections)
+- insert:
+    - id: dh-workspace
+      name: '@dh-multiagents/dh-workspace'
+      # registers tools: plan_save, plan_read (+ systemPrompt.context sections)
 
-- id: dh-delegation
-  name: '@dh-multiagents/dh-delegation'
-  # registers tools: delegate, delegation_read, delegation_list
+    - id: dh-delegation
+      name: '@dh-multiagents/dh-delegation'
+      # registers tools: delegate, delegation_read, delegation_list
 
-- id: dh-subagent-preset
-  name: '@dh-multiagents/dh-subagent-preset'
-  # registers SubagentProvider names: explore, researcher, coder, scribe, reviewer
+    - id: dh-subagent-preset
+      name: '@dh-multiagents/dh-subagent-preset'
+      # registers SubagentProvider names: explore, researcher, coder, scribe, reviewer
 
-- id: dh-worktree
-  name: '@dh-multiagents/dh-worktree'
-  # registers tools: worktree_create, worktree_delete
+    - id: dh-worktree
+      name: '@dh-multiagents/dh-worktree'
+      # registers tools: worktree_create, worktree_delete
 
 # Skills: dh-philosophy is a content package (NOT a plugin); its five
 # SKILL.md files are surfaced through the skill-filesystem provider. The base

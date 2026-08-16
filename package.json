@@ -19,7 +19,7 @@
     "@dh-multiagents/dh-philosophy": "workspace:*",
     "@dh-multiagents/dh-subagent-preset": "workspace:*",
     "@dh-multiagents/dh-worktree": "workspace:*",
-    "@dh-multiagents/dh-workspace": "0.1.2"
+    "@dh-multiagents/dh-workspace": "workspace:*"
   },
   "dsh": {
     "bundle": {
