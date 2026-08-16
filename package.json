@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "postinstall": "node scripts/mirror-presets.mjs",
     "typecheck": "pnpm -r run typecheck",
     "clean": "rm -rf packages/*/lib"
   },
