@@ -217,7 +217,6 @@ export const CAPABILITY_MATRIX: Readonly<Record<string, readonly string[]>> = {
   plan: [
     'plan_save', 'plan_read',
     'delegate', 'delegation_read', 'delegation_list',
-    'subagent', 'subagent_fork',
     'ask_user_question', 'send_message', 'interrupt_agent', 'list_agents',
     'skill', 'todo_write',
     'create_goal', 'get_goal', 'update_goal', 'exit_plan_mode',
@@ -225,7 +224,6 @@ export const CAPABILITY_MATRIX: Readonly<Record<string, readonly string[]>> = {
   /** Read-only build orchestrator: delegates builders, isolates work with worktrees. */
   build: [
     'delegate', 'delegation_read', 'delegation_list',
-    'subagent', 'subagent_fork',
     'ask_user_question', 'send_message', 'interrupt_agent', 'list_agents',
     'worktree_create', 'worktree_delete',
     'skill', 'todo_write',
