@@ -28,6 +28,14 @@ dsh plugin --profile <name> add @dh-multiagents/bundle
 
 ## Quick Start
 
+> [!IMPORTANT]
+> **Select `Plan` or `Build` at the start of your session:**
+> In the Web or TUI interface, select either the **`plan`** or **`build`** preset in the preset picker at the beginning of your session:
+> - **`plan`**: Use when starting a task to research the codebase and write an implementation plan (delegates to `explore` and `researcher`).
+> - **`build`**: Use to execute an approved plan (delegates to `coder`, `scribe`, and `reviewer` with worktrees).
+>
+> Only `plan` and `build` act as orchestrators. The subagent presets (`explore`, `researcher`, `coder`, `scribe`, `reviewer`) are spawned automatically via `delegate` and should not be selected as top-level sessions.
+
 ```bash
 # headless mode needs the headless bundle (add once)
 dsh plugin --profile <name> add @deepseek-ai/dsh-headless
