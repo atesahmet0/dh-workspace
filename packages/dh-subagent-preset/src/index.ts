@@ -400,9 +400,6 @@ function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
       + `(provider: ${String(provider)}); aborting child creation instead of running it under the parent's preset`,
     )
   }
-  // Authoritative capability enforcement, applied synchronously inside the
-  // creation window regardless of when the async re-link lands.
-  restrictPresetTools(childCtx, presetId)
   markPresetEnforced(childCtx)
   const presets = childCtx.get('agentPresets') as AgentPresets | undefined
   if (presets === undefined) {
@@ -412,16 +409,24 @@ function applyNamedPresetToContinuableChild(childCtx: Context): () => void {
     )
   }
   // Re-link inside the creation window, mirroring the one-shot path's async
-  // setup. On rejection the child is cancelled (never silently left under the
-  // parent's composition) and the failure is surfaced loudly.
-  void presets.recompose(childCtx, presetId).catch((error: unknown) => {
-    childCtx.logger.error(
-      `dh-subagent-preset: failed to re-link continuable child onto preset "${presetId}"; `
-      + `cancelling the child instead of running it under the parent's preset: ${errorMessage(error)}`,
-    )
-    childCtx.agent?.cancel({ kind: 'parent' })
-  })
-  return () => {}
+  // setup. Apply capability restriction AFTER recompose mounts the target preset's
+  // tools, so restrictPresetTools evaluates against the child's new toolset rather
+  // than the parent's restricted toolset. On rejection the child is cancelled.
+  let disposeRestriction: (() => void) | undefined
+  void presets.recompose(childCtx, presetId)
+    .then(() => {
+      disposeRestriction = restrictPresetTools(childCtx, presetId)
+    })
+    .catch((error: unknown) => {
+      childCtx.logger.error(
+        `dh-subagent-preset: failed to re-link continuable child onto preset "${presetId}"; `
+        + `cancelling the child instead of running it under the parent's preset: ${errorMessage(error)}`,
+      )
+      childCtx.agent?.cancel({ kind: 'parent' })
+    })
+  return () => {
+    disposeRestriction?.()
+  }
 }
 
 // ---------------------------------------------------------------------------
