@@ -1,7 +1,7 @@
 {
   "name": "@dh-multiagents/bundle",
   "description": "Out-of-tree dsh plugin bundle: philosophy skills plus workspace, delegation, subagent-preset, and worktree plugins (naming contract in DESIGN.md)",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": false,
   "type": "module",
   "files": [

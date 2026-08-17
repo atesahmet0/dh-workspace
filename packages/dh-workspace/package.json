@@ -1,7 +1,7 @@
 {
   "name": "@dh-multiagents/dh-workspace",
-  "description": "Plan persistence and routing plugin for dh-multiagents: registers plan_save and plan_read tools",
-  "version": "0.1.7",
+  "description": "Workspace plugin for dh-multiagents: registers plan_save/plan_read tools and routing rules",
+  "version": "0.1.8",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

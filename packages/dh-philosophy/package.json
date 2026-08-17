@@ -1,7 +1,7 @@
 {
   "name": "@dh-multiagents/dh-philosophy",
   "description": "Philosophy skills for dh-multiagents agents: code-philosophy, frontend-philosophy, code-review, plan-review, plan-protocol (SKILL.md packages, not a plugin)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
